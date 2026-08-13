@@ -2527,24 +2527,43 @@ def _hamming_distance(a: int, b: int) -> int:
 
 
 def _load_blocked_logo_hashes() -> list:
+    """يجلب بصمات الشعارات المحظورة من مصدرين معاً (يُدمَجان دون إسقاط أي
+    منهما، حفاظاً على الحماية الأصلية):
+      1) الملفات المحلية داخل مجلد blocked_logos بالريبو (الحماية السابقة).
+      2) جدول blocked_logo_hashes على Supabase (حماية إضافية، تُدار بدون
+         تعديل كود أو دفع commit).
+    فشل أحد المصدرين لا يوقف الآخر — يُسجَّل تحذير فقط ويُكمَل بما توفّر.
+    يُخزَّن الناتج المدموج في كاش داخل الذاكرة طوال عمر التشغيلة الواحدة."""
     global _BLOCKED_LOGO_HASHES_CACHE
     if _BLOCKED_LOGO_HASHES_CACHE is not None:
         return _BLOCKED_LOGO_HASHES_CACHE
 
     hashes = []
-    if Image is None or not os.path.isdir(BLOCKED_LOGOS_DIR):
-        _BLOCKED_LOGO_HASHES_CACHE = hashes
-        return hashes
 
-    for filename in os.listdir(BLOCKED_LOGOS_DIR):
-        if not filename.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
-            continue
-        path = os.path.join(BLOCKED_LOGOS_DIR, filename)
-        try:
-            with Image.open(path) as logo_img:
-                hashes.append(_average_hash(logo_img))
-        except Exception as e:
-            log.warning(f"⚠️  تعذّر قراءة صورة الشعار ({filename}): {e}")
+    # المصدر 1: المجلد المحلي بالريبو (الحماية الأصلية)
+    if Image is not None and os.path.isdir(BLOCKED_LOGOS_DIR):
+        for filename in os.listdir(BLOCKED_LOGOS_DIR):
+            if not filename.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
+                continue
+            path = os.path.join(BLOCKED_LOGOS_DIR, filename)
+            try:
+                with Image.open(path) as logo_img:
+                    hashes.append(_average_hash(logo_img))
+            except Exception as e:
+                log.warning(f"⚠️  تعذّر قراءة صورة الشعار المحلية ({filename}): {e}")
+
+    # المصدر 2: جدول Supabase (حماية إضافية)
+    try:
+        url = f"{SUPABASE_URL}/rest/v1/blocked_logo_hashes?select=hash"
+        r = requests.get(url, headers=sb_headers(), timeout=REQUEST_TIMEOUT)
+        r.raise_for_status()
+        for row in r.json():
+            try:
+                hashes.append(int(row["hash"]))
+            except (KeyError, ValueError, TypeError):
+                continue
+    except Exception as e:
+        log.warning(f"⚠️  تعذّر جلب بصمات الشعارات المحظورة من Supabase: {e}")
 
     _BLOCKED_LOGO_HASHES_CACHE = hashes
     return hashes
