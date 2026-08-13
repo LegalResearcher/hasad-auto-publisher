@@ -1,0 +1,46 @@
+name: نشر تلقائي - حصاد اليوم
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"   # كل 5 دقائق
+  workflow_dispatch: {}     # يسمح بتشغيل يدوي فوري من تبويب Actions للاختبار
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: سحب الكود
+        uses: actions/checkout@v4
+
+      - name: تجهيز بايثون
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: تثبيت المكتبات
+        run: pip install -r requirements.txt
+
+      # يحافظ على قاعدة SQLite المحلية (فحص التشابه الدلالي بين العناوين
+      # خلال آخر 24 ساعة) بين كل تشغيلة وأخرى. كل تشغيلة تحفظ نسخة جديدة
+      # بمفتاح مميّز (رقم التشغيلة)، وتسترجع أقرب نسخة سابقة متوفرة عبر
+      # restore-keys — تقريب عملي جيد للاستمرارية رغم عدم وجود قرص دائم
+      # حقيقي على GitHub Actions.
+      - name: استرجاع/حفظ بيانات البوت (قاعدة فحص التكرار الدلالي)
+        uses: actions/cache@v4
+        with:
+          path: hasad_data
+          key: hasad-data-${{ github.run_id }}
+          restore-keys: |
+            hasad-data-
+
+      - name: تشغيل بوت النشر
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          GEMINI_PRIORITY_KEYS: ${{ secrets.GEMINI_PRIORITY_KEYS }}
+          GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
+        run: python auto_publish_alittihad_alkhabar.py
