@@ -216,7 +216,7 @@ THUMB_START_QUALITY = 80
 THUMB_MIN_QUALITY = 30
 THUMB_QUALITY_STEP = 5
 
-BLOCKED_LOGOS_DIR = os.path.join(BASE_DIR, "blocked_logos")
+BLOCKED_LOGOS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "blocked_logos")
 LOGO_HASH_SIZE = 8
 LOGO_MATCH_MAX_DISTANCE = 6
 
