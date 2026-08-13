@@ -1941,6 +1941,11 @@ def log_published_title(
     finally:
         conn.close()
 
+    # طبقة دائمة إضافية على Supabase (bot_published_titles_log) — لا تعتمد
+    # على نجاح السجل المحلي أعلاه، وأي فشل بها يُهمَل بالكامل (راجع
+    # sb_log_published_title). السجل المحلي بـSQLite يبقى الأساس السريع.
+    sb_log_published_title(title, pub_date_iso, embedding, content_embedding, entities)
+
 
 def get_recent_published_titles(hours: int = PUBLISHED_TITLES_MAX_AGE_HOURS) -> list[dict]:
     """يعيد الأخبار المنشورة خلال آخر عدة ساعات من السجل المحلي (بدون أي
@@ -1974,6 +1979,96 @@ def get_recent_published_titles(hours: int = PUBLISHED_TITLES_MAX_AGE_HOURS) -> 
             "content_embedding": content_embedding,
             "entities": entities,
         })
+
+    # دمج مع السجل الدائم على Supabase (bot_published_titles_log) — يعوّض
+    # أي نقص بالسجل المحلي (مثلاً أول تشغيلة بعد إخلاء كاش GitHub Actions
+    # أو أول تشغيل على جهاز/Termux جديد). عناوين موجودة محلياً أصلاً لا
+    # تُكرَّر.
+    local_titles = {o["title"] for o in out}
+    for remote in sb_get_recent_published_titles(hours):
+        if remote["title"] not in local_titles:
+            out.append(remote)
+            local_titles.add(remote["title"])
+
+    return out
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  💾 نسخة Supabase من سجل العناوين المنشورة (bot_published_titles_log)
+#  — طبقة إضافية دائمة تكمّل قاعدة SQLite المحلية (hasad_data/published_
+#  titles_log.db). السبب: قاعدة SQLite المحلية تُحفَظ بين تشغيلات
+#  GitHub Actions عبر actions/cache بأفضل جهد فقط (restore-keys تقريبية
+#  حسب أحدث نسخة متوفرة بالكاش — عرضة للإخلاء بعد 7 أيام بلا استخدام أو
+#  عند امتلاء حصة الكاش)، ولا تُحفَظ إطلاقاً بين أجهزة/بيئات مختلفة
+#  (مثلاً Termux محلياً مقابل GitHub Actions). جدول Supabase يضمن دوام
+#  السجل 100% بغض النظر عن حالة الكاش أو بيئة التشغيل، مع إبقاء SQLite
+#  كطبقة أولى أسرع (بدون أي طلب شبكة) لا تتأثر بانقطاع الاتصال بـ
+#  Supabase.
+# ══════════════════════════════════════════════════════════════════════
+BOT_TITLES_TABLE = "bot_published_titles_log"
+
+
+def sb_log_published_title(
+    title: str,
+    pub_date_iso: str,
+    embedding: Optional[list[float]] = None,
+    content_embedding: Optional[list[float]] = None,
+    entities: Optional[list] = None,
+) -> None:
+    """يسجّل نفس الخبر بجدول bot_published_titles_log على Supabase (طبقة
+    دائمة إضافية). أي فشل هنا (شبكة/صلاحية/مهلة) يُهمَل بالكامل ولا يوقف
+    البوت ولا يرفع استثناء — السجل المحلي بـSQLite هو الأساس دائماً."""
+    try:
+        url = f"{SUPABASE_URL}/rest/v1/{BOT_TITLES_TABLE}"
+        record = {
+            "title": title,
+            "pub_date": pub_date_iso,
+            "embedding": embedding,
+            "content_embedding": content_embedding,
+            "entities": entities,
+        }
+        requests.post(
+            url,
+            headers={**sb_headers(), "Prefer": "return=minimal"},
+            json=record,
+            timeout=REQUEST_TIMEOUT,
+        )
+    except Exception as e:
+        log.warning(f"⚠️  تعذّر حفظ الخبر بسجل العناوين على Supabase (تُجوهل، السجل المحلي كافٍ): {e}")
+
+
+def sb_get_recent_published_titles(hours: int = PUBLISHED_TITLES_MAX_AGE_HOURS) -> list[dict]:
+    """يجيب الأخبار المنشورة خلال آخر عدة ساعات من جدول Supabase الدائم،
+    لتعويض أي نقص بالسجل المحلي. أي فشل هنا (شبكة/صلاحية) يُرجع قائمة
+    فارغة بدل تعطيل البوت — نفس فلسفة sb_log_published_title."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+    out: list[dict] = []
+    try:
+        url = f"{SUPABASE_URL}/rest/v1/{BOT_TITLES_TABLE}"
+        params = {
+            "select": "title,pub_date,embedding,content_embedding,entities",
+            "pub_date": f"gte.{cutoff}",
+            "order": "pub_date.desc",
+            "limit": "1000",
+        }
+        r = requests.get(url, headers=sb_headers(), params=params, timeout=REQUEST_TIMEOUT)
+        if r.status_code != 200:
+            log.warning(f"⚠️  تعذّر جلب سجل العناوين من Supabase [{r.status_code}]: {summarize_sb_error(r)}")
+            return out
+        for row in r.json():
+            try:
+                pub_date = datetime.fromisoformat(row["pub_date"])
+            except (ValueError, KeyError, TypeError):
+                continue
+            out.append({
+                "title": row.get("title", ""),
+                "pub_date": pub_date,
+                "embedding": row.get("embedding"),
+                "content_embedding": row.get("content_embedding"),
+                "entities": row.get("entities"),
+            })
+    except Exception as e:
+        log.warning(f"⚠️  تعذّر الاتصال بـSupabase لجلب سجل العناوين (تُجوهل، السجل المحلي كافٍ): {e}")
     return out
 
 
