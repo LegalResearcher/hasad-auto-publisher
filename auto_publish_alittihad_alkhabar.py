@@ -68,7 +68,7 @@ from hasad_news_bot_fixed import (
     seed_views,
     build_canonical_url,
     send_to_telegram,
-    request_google_indexing,
+    log_discovery_ready,
     apply_headline_design_to_image,
     HEADLINE_DESIGN_ENABLED,
 )
@@ -368,7 +368,7 @@ def run():
             log_raw_content(it["title"], it.get("raw_body", ""), record["created_at"])
             save_blocked_link(it["link"])  # منع إعادة النشر مستقبلاً حتى لو حُذف الخبر من الموقع
             seed_views(post_id)
-            canonical_url = build_canonical_url(record["slug"], record["created_at"])
+            canonical_url = build_canonical_url(record["slug"], record.get("published_at") or record["created_at"])
 
             # إرسال الخبر إلى تليجرام. ملاحظة: send_to_telegram ترجع
             # True/False فقط (نجاح/فشل الإرسال) وليست رابط المنشور —
@@ -377,7 +377,7 @@ def run():
             # العامة لمعاينة القناة (t.me/s/hasadalyoum).
             send_to_telegram(record["title"], canonical_url)
 
-            request_google_indexing([canonical_url])
+            log_discovery_ready([canonical_url])
         else:
             fail += 1
 

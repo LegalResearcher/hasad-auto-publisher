@@ -302,7 +302,6 @@ def send_admin_alert(text: str) -> bool:
 
 
 AUTO_SEED_VIEWS = True
-GOOGLE_INDEXING_ENABLED = True
 NEWS_REPORTS_CATEGORY_NAME = "أخبار وتقارير"
 
 
@@ -368,27 +367,23 @@ def seed_views(post_id: str) -> None:
 YEMEN_TZ = timezone(timedelta(hours=3))
 
 
-def build_canonical_url(slug: str, created_at_iso: str) -> str:
-    dt = datetime.fromisoformat(created_at_iso)
+def build_canonical_url(slug: str, published_at_iso: str) -> str:
+    """يبني الرابط الكنسي من وقت النشر الفعلي، مع الإبقاء على created_at كبديل."""
+    dt = datetime.fromisoformat(published_at_iso)
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     dt = dt.astimezone(YEMEN_TZ)
     return f"{SITE_BASE_URL}/{dt.year:04d}/{dt.month:02d}/{dt.day:02d}/{slug}"
 
 
-def request_google_indexing(urls: list) -> None:
-    if not GOOGLE_INDEXING_ENABLED or not urls:
-        return
-    try:
-        url = f"{SUPABASE_URL}/functions/v1/google-indexing"
-        r = requests.post(url, headers=sb_headers(),
-                           json={"urls": urls, "type": "URL_UPDATED"}, timeout=REQUEST_TIMEOUT)
-        if r.status_code == 200:
-            log.info(f"  📡 أُرسل للأرشفة (Google Indexing)")
-        else:
-            log.warning(f"  ⚠️  فشل إرسال الأرشفة [{r.status_code}]: {r.text[:200]}")
-    except requests.RequestException as e:
-        log.warning(f"  ⚠️  خطأ إرسال الأرشفة: {e}")
+def log_discovery_ready(urls: list) -> None:
+    """يسجل جاهزية الخبر للاكتشاف دون ادعاء فهرسة فورية من Google.
+
+    المقالات المنشورة تظهر في Sitemap وNews Sitemap وRSS الديناميكية. لا نستخدم
+    Google Indexing API للأخبار العادية لأنها ليست ضمن نطاقها المدعوم.
+    """
+    if urls:
+        log.info(f"  🔎 جاهز للاكتشاف عبر الرابط الكنسي وSitemap وRSS ({len(urls)} رابط)")
 
 # ══════════════════════════════════════════════════════════════════════
 #  🔑 المفاتيح ذات الأولوية — تُجرَّب أولاً وبنفس هذا الترتيب تماماً:
@@ -1837,7 +1832,8 @@ def check_and_notify_scheduled_posts() -> None:
             if not entry.get("_views_seeded"):
                 seed_views(post_id)
                 entry["_views_seeded"] = True
-            canonical_url = build_canonical_url(row.get("slug") or entry.get("slug"), row.get("created_at") or entry.get("created_at"))
+            published_at = row.get("published_at") or entry.get("published_at") or entry.get("scheduled_at") or row.get("created_at") or entry.get("created_at")
+            canonical_url = build_canonical_url(row.get("slug") or entry.get("slug"), published_at)
             if send_to_telegram(entry.get("title", ""), canonical_url):
                 log.info(f"  📢 نُشر فعلياً وأُرسل لتيليجرام الآن: {entry.get('title', '')[:60]}")
                 notified += 1
@@ -3400,14 +3396,20 @@ def main():
             if not interval_minutes:
                 seed_views(post_id)
 
-            canonical_url = build_canonical_url(record["slug"], record["created_at"])
+            canonical_url = build_canonical_url(record["slug"], record.get("published_at") or record["created_at"])
             if interval_minutes:
                 pending = load_pending_scheduled()
-                pending.append({"id": post_id, "title": record["title"], "slug": record["slug"], "created_at": record["created_at"]})
+                pending.append({
+                    "id": post_id,
+                    "title": record["title"],
+                    "slug": record["slug"],
+                    "created_at": record["created_at"],
+                    "scheduled_at": publish_time,
+                })
                 save_pending_scheduled(pending)
             else:
                 send_to_telegram(record["title"], canonical_url)
-                request_google_indexing([canonical_url])
+                log_discovery_ready([canonical_url])
         else:
             fail += 1
 
