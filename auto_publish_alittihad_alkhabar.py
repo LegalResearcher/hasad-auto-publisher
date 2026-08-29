@@ -118,7 +118,7 @@ TECH_CATEGORY = "تكنولوجيا"
 
 # فيد الرياضة (سكاي نيوز عربية) — مضاف مباشرة هنا لأنه غير معرّف
 # في hasad_news_bot_fixed
-RSS_SKYNEWS_SPORT_URL = "https://www.skynewsarabia.com/web/rss/sport.xml"
+RSS_SKYNEWS_SPORT_URL = "https://www.skynewsarabia.com/rss/sport.xml"
 
 # فيد التكنولوجيا (سكاي نيوز عربية) — نفس منطق فيد الرياضة تماماً
 RSS_SKYNEWS_TECH_URL = "https://www.skynewsarabia.com/web/rss/technology.xml"
@@ -134,7 +134,7 @@ SELECTED_FEEDS = {
     RSS_YPAGENCY_REPORTS_URL: RSS_YPAGENCY_REPORTS_CATEGORY,
     RSS_YPAGENCY_ANALYSIS_URL: RSS_YPAGENCY_ANALYSIS_CATEGORY,
     RSS_YPAGENCY_OCCUPIED_PALESTINE_URL: RSS_YPAGENCY_OCCUPIED_PALESTINE_CATEGORY,
-    # RSS_SKYNEWS_SPORT_URL: SPORT_CATEGORY,  # موقوف مؤقتاً
+    RSS_SKYNEWS_SPORT_URL: SPORT_CATEGORY,
     RSS_SKYNEWS_TECH_URL: TECH_CATEGORY,
 }
 
