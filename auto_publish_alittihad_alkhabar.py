@@ -114,7 +114,7 @@ import json
 TARGET_CATEGORY = "أخبار وتقارير"
 INTERNATIONAL_CATEGORY = "شؤون دولية"
 SPORT_CATEGORY = "رياضة"
-TECH_CATEGORY = "تكنولوجيا"
+TECH_CATEGORY = "منوعات وتكنولوجيا"
 
 # فيد الرياضة (سكاي نيوز عربية) — مضاف مباشرة هنا لأنه غير معرّف
 # في hasad_news_bot_fixed
