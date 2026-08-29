@@ -115,6 +115,7 @@ TARGET_CATEGORY = "أخبار وتقارير"
 INTERNATIONAL_CATEGORY = "شؤون دولية"
 SPORT_CATEGORY = "رياضة"
 TECH_CATEGORY = "منوعات وتكنولوجيا"
+WORLD_CATEGORY = "أخبار العالم"
 
 # فيد الرياضة (سكاي نيوز عربية) — مضاف مباشرة هنا لأنه غير معرّف
 # في hasad_news_bot_fixed
@@ -122,6 +123,8 @@ RSS_SKYNEWS_SPORT_URL = "https://www.skynewsarabia.com/rss/sport.xml"
 
 # فيد التكنولوجيا (سكاي نيوز عربية) — نفس منطق فيد الرياضة تماماً
 RSS_SKYNEWS_TECH_URL = "https://www.skynewsarabia.com/web/rss/technology.xml"
+
+RSS_SKYNEWS_WORLD_URL = "http://www.skynewsarabia.com/web/rss/world.xml"
 
 SELECTED_FEEDS = {
     # RSS_MASA_URL: TARGET_CATEGORY,  # موقوف مؤقتاً
@@ -136,6 +139,7 @@ SELECTED_FEEDS = {
     RSS_YPAGENCY_OCCUPIED_PALESTINE_URL: RSS_YPAGENCY_OCCUPIED_PALESTINE_CATEGORY,
     RSS_SKYNEWS_SPORT_URL: SPORT_CATEGORY,
     RSS_SKYNEWS_TECH_URL: TECH_CATEGORY,
+    RSS_SKYNEWS_WORLD_URL: WORLD_CATEGORY,
 }
 
 EXTENDED_RESPONSE_SCHEMA = {
@@ -276,7 +280,7 @@ def run():
     # سكاي نيوز فقط، لنجبر نفس آلية og:image عالية الجودة أن تُستخدم.
     # ─────────────────────────────────────────────────────────────
     for it in new_items:
-        if it.get("source_feed") in (RSS_SKYNEWS_SPORT_URL, RSS_SKYNEWS_TECH_URL):
+        if it.get("source_feed") in (RSS_SKYNEWS_SPORT_URL, RSS_SKYNEWS_TECH_URL, RSS_SKYNEWS_WORLD_URL):
             it["image_url"] = None
 
     log.info("─" * 60)
@@ -317,7 +321,7 @@ def run():
 
         post_category = (
             INTERNATIONAL_CATEGORY
-            if news_scope == "دولي" and base_category not in (SPORT_CATEGORY, TECH_CATEGORY)
+            if news_scope == "دولي" and base_category not in (SPORT_CATEGORY, TECH_CATEGORY, WORLD_CATEGORY)
             else base_category
         )
         if post_category == INTERNATIONAL_CATEGORY:
