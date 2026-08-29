@@ -112,10 +112,10 @@ RSS_SKYNEWS_SPORT_URL = "https://www.skynewsarabia.com/web/rss/sport.xml"
 RSS_SKYNEWS_TECH_URL = "https://www.skynewsarabia.com/web/rss/technology.xml"
 
 SELECTED_FEEDS = {
-    RSS_MASA_URL: TARGET_CATEGORY,
+    # RSS_MASA_URL: TARGET_CATEGORY,  # موقوف مؤقتاً
     # RSS_ALITTIHAD_FULL_URL: TARGET_CATEGORY,  # موقوف مؤقتاً
     # RSS_ALKHABAR_FULL_URL: TARGET_CATEGORY,  # موقوف مؤقتاً
-    # RSS_YPAGENCY_FULL_URL: TARGET_CATEGORY,  # موقوف مؤقتاً
+    RSS_YPAGENCY_FULL_URL: RSS_YPAGENCY_FULL_CATEGORY,
     # RSS_SKYNEWS_SPORT_URL: SPORT_CATEGORY,  # موقوف مؤقتاً
     RSS_SKYNEWS_TECH_URL: TECH_CATEGORY,
 }

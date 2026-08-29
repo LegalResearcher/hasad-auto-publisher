@@ -113,8 +113,8 @@ RSS_ALITTIHAD_FULL_CATEGORY = "أخبار وتقارير"
 RSS_ALKHABAR_FULL_URL = "https://alkhabaralyemeni.net/category/%d8%a7%d8%ae%d8%a8%d8%a7%d8%b1-%d8%a7%d9%84%d9%88%d8%b7%d9%86/feed/"
 RSS_ALKHABAR_FULL_CATEGORY = "أخبار وتقارير"
 
-RSS_YPAGENCY_FULL_URL = "https://www.ypagency.net/feed/"
-RSS_YPAGENCY_FULL_CATEGORY = "أخبار وتقارير"
+RSS_YPAGENCY_FULL_URL = "https://www.ypagency.net/category/%d8%a7%d9%84%d9%8a%d9%85%d9%86/feed"
+RSS_YPAGENCY_FULL_CATEGORY = "اليمن"
 
 BLOCKED_KEYWORDS = ["مواقيت الأذان", "مليشيا"]
 
