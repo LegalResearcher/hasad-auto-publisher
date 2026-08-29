@@ -133,6 +133,9 @@ RSS_YPAGENCY_REPORTS_CATEGORY = "شؤون دولية"
 RSS_YPAGENCY_ANALYSIS_URL = "https://www.ypagency.net/category/%d8%aa%d8%ad%d9%84%d9%8a%d9%84%d8%a7%d8%aa/feed"
 RSS_YPAGENCY_ANALYSIS_CATEGORY = "أخبار وتقارير"
 
+RSS_YPAGENCY_OCCUPIED_PALESTINE_URL = "https://www.ypagency.net/category/%d9%81%d9%84%d8%b3%d8%b7%d9%8a%d9%86-%d8%a7%d9%84%d9%85%d8%ad%d8%aa%d9%84%d8%a9/feed"
+RSS_YPAGENCY_OCCUPIED_PALESTINE_CATEGORY = "فلسطين المحتلة"
+
 # BOT_DATA_DIR: مجلد بيانات محلي قابل للتهيئة عبر متغير بيئة — على GitHub
 # Actions يُحافَظ عليه بين التشغيلات عبر actions/cache (راجع ملف الجدولة)
 # لأن هذا البوت يعتمد على SQLite محلي لفحص التشابه الدلالي بين العناوين.
