@@ -5,6 +5,11 @@ on:
     types: [supabase-publish]
   workflow_dispatch: {}     # يسمح بتشغيل يدوي فوري من تبويب Actions للاختبار
 
+# منع تشغيل نسختين من البوت في الوقت نفسه؛ التشغيل التالي ينتظر حتى انتهاء السابق
+concurrency:
+  group: hasad-auto-publisher
+  cancel-in-progress: false
+
 jobs:
   publish:
     runs-on: ubuntu-latest
