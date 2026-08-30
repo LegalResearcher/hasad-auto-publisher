@@ -1,8 +1,8 @@
 name: نشر تلقائي - حصاد اليوم
 
 on:
-  schedule:
-    - cron: "7 * * * *"      # الدقيقة 7 من كل ساعة
+  repository_dispatch:
+    types: [supabase-publish]
   workflow_dispatch: {}     # يسمح بتشغيل يدوي فوري من تبويب Actions للاختبار
 
 jobs:
