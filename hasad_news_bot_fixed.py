@@ -35,6 +35,7 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from typing import Optional
+from urllib.parse import quote as _urlquote
 
 import requests
 from bs4 import BeautifulSoup, Tag
@@ -1280,6 +1281,42 @@ MIN_ACCEPTABLE_LOCAL_LEN = 150
 ALWAYS_STRIP_TAGS = ("script", "style", "iframe", "form", "noscript", "svg")
 ZERO_WIDTH_RE = re.compile(r"[\u200b\u200c\u200d\u200e\u200f\ufeff]")
 
+_PROXY_PASSTHROUGH_URLS = [
+    "https://janoub-proxy.moieen2000.workers.dev/?url={}",
+]
+_PROXY_RETRIES_PER_HOST = 2
+_PROXY_RETRY_DELAY_SECONDS = 4
+
+def fetch_with_bypass(url: str, headers: Optional[dict] = None,
+                      timeout: int = REQUEST_TIMEOUT) -> requests.Response:
+    """يجلب الصفحة مباشرة أولاً، ثم يستخدم بروكسي HTTP احتياطياً عند
+    تعذّر الاتصال، مع إعادة المحاولة لتقليل فشل الاستخراج المؤقت."""
+    headers = headers or {}
+    try:
+        resp = requests.get(url, headers=headers, timeout=timeout)
+        resp.raise_for_status()
+        return resp
+    except requests.RequestException as e:
+        log.warning(f"  ⚠️  فشل الاتصال المباشر بـ {url}: {e} — أجرّب مساراً احتياطياً")
+    last_exc: Optional[Exception] = None
+    for full_pass in (1, 2):
+        for template in _PROXY_PASSTHROUGH_URLS:
+            proxied_url = template.format(_urlquote(url, safe=""))
+            for attempt in range(1, _PROXY_RETRIES_PER_HOST + 1):
+                try:
+                    resp = requests.get(proxied_url, headers=headers, timeout=timeout + 20)
+                    resp.raise_for_status()
+                    log.info(f"  🌐 جُلبت الصفحة عبر بروكسي HTTP احتياطي: {url}")
+                    return resp
+                except requests.RequestException as e:
+                    last_exc = e
+                    log.warning(f"  ⚠️  فشل المسار الاحتياطي (محاولة {attempt}/{_PROXY_RETRIES_PER_HOST}): {e}")
+                    if attempt < _PROXY_RETRIES_PER_HOST:
+                        time.sleep(_PROXY_RETRY_DELAY_SECONDS)
+        if full_pass == 1:
+            time.sleep(20)
+    raise last_exc
+
 
 def _clean_text(text: str) -> str:
     text = ZERO_WIDTH_RE.sub("", text)
@@ -1332,6 +1369,8 @@ def _extract_by_doc_order(h1: Optional[Tag], soup: BeautifulSoup) -> list[str]:
     start_node = h1 or soup.body or soup
     paragraphs = []
     for el in start_node.find_all_next(["p", "h2", "h3", "h4"]):
+        if _is_related_article_block(el):
+            break
         text = _clean_text(el.get_text(" ", strip=True))
         if not text:
             continue
@@ -1355,6 +1394,18 @@ def _is_noise_line(text: str) -> bool:
 def _text_hits_stop_marker(text: str) -> bool:
     text = text.strip()
     return any(marker in text for marker in STOP_MARKERS)
+
+def _is_related_article_block(el: Tag) -> bool:
+    """يمنع التقاط عناوين الأخبار المقترحة التي تضعها بعض الصفحات داخل
+    عناصر p ذات class=title بعد نهاية متن الخبر."""
+    classes = set(el.get("class") or [])
+    if "title" in classes and el.find("a") is not None:
+        return True
+    link = el.find("a", class_=lambda value: value and any(
+        c in (value if isinstance(value, list) else str(value).split())
+        for c in ("post-title", "post-url")
+    ))
+    return link is not None
 
 
 def _own_visible_text_len(tag: Tag) -> int:
@@ -1491,8 +1542,7 @@ def _detect_site_category(h1: Optional[Tag]) -> Optional[str]:
 
 def extract_article(url: str) -> Optional[dict]:
     try:
-        resp = requests.get(url, headers=ARTICLE_HEADERS, timeout=ARTICLE_REQUEST_TIMEOUT)
-        resp.raise_for_status()
+        resp = fetch_with_bypass(url, headers=ARTICLE_HEADERS, timeout=ARTICLE_REQUEST_TIMEOUT)
     except requests.RequestException:
         return extract_via_jina(url)
 
@@ -1546,6 +1596,8 @@ def extract_article(url: str) -> Optional[dict]:
 
         best = max(groups.values(), key=lambda g: g["total_len"])
         for leaf in best["leaves"]:
+            if _is_related_article_block(leaf):
+                break
             text = _clean_text(leaf.get_text(" ", strip=True))
             if _hits_stop_regex(text) or _text_hits_stop_marker(text):
                 break
