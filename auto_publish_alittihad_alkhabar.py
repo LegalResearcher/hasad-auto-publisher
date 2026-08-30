@@ -321,7 +321,7 @@ def run():
 
         post_category = (
             INTERNATIONAL_CATEGORY
-            if news_scope == "دولي" and base_category not in (SPORT_CATEGORY, TECH_CATEGORY, WORLD_CATEGORY)
+            if news_scope == "دولي" and base_category not in (SPORT_CATEGORY, TECH_CATEGORY, WORLD_CATEGORY, RSS_YPAGENCY_OCCUPIED_PALESTINE_CATEGORY)
             else base_category
         )
         if post_category == INTERNATIONAL_CATEGORY:
