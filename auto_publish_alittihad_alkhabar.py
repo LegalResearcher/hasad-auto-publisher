@@ -347,11 +347,6 @@ def run():
                 it.get("image_url"), it.get("link"), headline_text=final_title,
             )
 
-        if it.get("source_feed") == RSS_YPAGENCY_FULL_URL and not image_url:
-            log.info(f"  🚫 [وكالة الصحافة اليمنية] تخطي خبر بلا صورة: {it['title'][:60]}")
-            skipped += 1
-            continue
-
         record = {
             "title": final_title,
             "slug": make_slug(final_title),
