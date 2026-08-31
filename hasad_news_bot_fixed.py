@@ -3098,6 +3098,10 @@ def rewrite_title_only(title: str, body: str) -> Optional[str]:
 def format_content_paragraphs(text: str) -> str:
     if not text:
         return text
+    # بعض مخرجات Gemini قد تصل أحياناً بتسلسلَي الهروب \n كنص حرفي
+    # (backslash + n) بدلاً من فاصل سطر فعلي. نطبّعها هنا قبل التخزين في
+    # Supabase حتى لا تظهر للمستخدم داخل المقال، دون تعديل البرومبت.
+    text = text.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\r", "\r")
     text = re.sub(r"([.؟!])\s*", r"\1\n", text)
     lines = [s.strip() for s in text.split("\n")]
     lines = [s for s in lines if s]
