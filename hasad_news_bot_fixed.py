@@ -457,14 +457,13 @@ NIGHT_MODEL_CASCADE = [
     "gemini-3.7-flash",
     "gemini-3.1-flash-lite",
     "gemini-3.5-flash-lite",
-    FALLBACK_MODEL,           # gemini-3.5-flash
-    PRIMARY_MODEL,            # gemini-3.6-flash
 ]
 
-MODEL_CASCADE = NIGHT_MODEL_CASCADE if (datetime.now(YEMEN_TZ).hour >= 21 or datetime.now(YEMEN_TZ).hour < 9) else DAY_MODEL_CASCADE
+NIGHT_MODE = datetime.now(YEMEN_TZ).hour >= 21 or datetime.now(YEMEN_TZ).hour < 9
+MODEL_CASCADE = NIGHT_MODEL_CASCADE if NIGHT_MODE else DAY_MODEL_CASCADE
 
 _current_group_idx = 0
-_current_key_idx = 3 if len(GEMINI_API_KEYS) >= 4 and (datetime.now(YEMEN_TZ).hour >= 21 or datetime.now(YEMEN_TZ).hour < 9) else 0
+_current_key_idx = 3 if len(GEMINI_API_KEYS) >= 4 and NIGHT_MODE else 0
 _model_stage_idx = 0
 
 
@@ -3029,8 +3028,28 @@ def call_with_rotation(prompt_text: str, schema: dict = None) -> str:
             else:
                 log.warning(
                     f"  🛑 انتهت الحصة اليومية ({current_model()}) "
-                    f"[{group_label} - مفتاح {_current_key_idx + 1}/{len(current_group)}]"
+                    f"[مجموعة {group_label} - مفتاح {_current_key_idx + 1}/{len(current_group)}]"
                 )
+
+            if NIGHT_MODE:
+                if _model_stage_idx + 1 < len(MODEL_CASCADE):
+                    _model_stage_idx += 1
+                    log.warning(
+                        f"  🌙 الانتقال إلى النموذج الليلي التالي {current_model()} "
+                        f"للمفتاح نفسه ({_model_stage_idx + 1}/{len(MODEL_CASCADE)})."
+                    )
+                    continue
+                if _current_key_idx > 0:
+                    _current_key_idx -= 1
+                    _model_stage_idx = 0
+                    log.warning(
+                        f"  🌙 استُنفدت نماذج المفتاح الحالي — الانتقال إلى "
+                        f"المفتاح {_current_key_idx + 1}/{len(current_group)} "
+                        f"بدءاً من {current_model()}."
+                    )
+                    continue
+                log.error("  ❌ استُنفدت مفاتيح ونماذج الفترة الليلية بالكامل.")
+                raise
 
             if _current_key_idx + 1 < len(current_group):
                 # لسه فيه مفاتيح تانية بنفس المجموعة الحالية لنفس مرحلة
