@@ -3050,39 +3050,23 @@ def call_with_rotation(prompt_text: str, schema: dict = None) -> str:
                 log.error("  ❌ استُنفدت مفاتيح ونماذج الفترة الليلية بالكامل.")
                 raise
 
-            if _current_key_idx + 1 < len(current_group):
-                # لسه فيه مفاتيح تانية بنفس المجموعة الحالية لنفس مرحلة
-                # النموذج — ننتقل للمفتاح التالي داخل المجموعة نفسها.
-                _current_key_idx += 1
-                log.info(
-                    f"  🔑 مفتاح جديد [{group_label} - "
-                    f"{_current_key_idx + 1}/{len(current_group)}] | {current_model()}"
-                )
-                continue
-
             if _model_stage_idx + 1 < len(MODEL_CASCADE):
-                # استُنفدت مفاتيح المجموعة الحالية على النموذج الحالي —
-                # ننتقل للنموذج التالي بالقائمة، بدءاً من أول مفتاح بنفس
-                # المجموعة الحالية (لا ننتقل للمجموعة التالية بعد).
+                # النهار: ننتقل للنموذج التالي مع إبقاء المفتاح نفسه.
                 _model_stage_idx += 1
-                _current_key_idx = 0
                 log.warning(
-                    f"  🔄 استُنفدت مفاتيح {group_label} على النموذج السابق — "
-                    f"التبديل المؤقت إلى {current_model()} بدءاً من أول مفتاح "
-                    f"بنفس المجموعة ({_model_stage_idx + 1}/{len(MODEL_CASCADE)})."
+                    f"  🔄 الانتقال إلى النموذج النهاري التالي {current_model()} "
+                    f"للمفتاح نفسه ({_model_stage_idx + 1}/{len(MODEL_CASCADE)})."
                 )
                 continue
 
-            if _current_group_idx + 1 < len(KEY_GROUPS):
-                # استُنفدت مفاتيح المجموعة الحالية على كل النماذج بالقائمة —
-                # ننتقل للمجموعة التالية (المفاتيح القديمة) ونعيد دورة
-                # النماذج كاملة من جديد بدءاً من أول نموذج وأول مفتاح فيها.
-                _current_group_idx += 1
+            if _current_key_idx + 1 < len(current_group):
+                # النهار: بعد استنفاد جميع النماذج، ننتقل للمفتاح التالي
+                # ونبدأ معه النماذج من البداية.
+                _current_key_idx += 1
                 _model_stage_idx = 0
-                _current_key_idx = 0
                 log.warning(
-                    f"  🔁 استُنفدت {group_label} بالكامل عبر كل النماذج — "
-                    f"الانتقال إلى مجموعة {_current_group_idx + 1}/{len(KEY_GROUPS)} "
+                    f"  🔑 استُنفدت نماذج المفتاح السابق — الانتقال إلى "
+                    f"المفتاح {_current_key_idx + 1}/{len(current_group)} "
                     f"بدءاً من {current_model()}."
                 )
                 continue
