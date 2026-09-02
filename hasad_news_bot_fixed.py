@@ -454,7 +454,7 @@ MODEL_CASCADE = [
 ]
 
 _current_group_idx = 0
-_current_key_idx = 3 if len(GEMINI_API_KEYS) >= 4 and (datetime.now(YEMEN_TZ).hour >= 22 or datetime.now(YEMEN_TZ).hour < 8) else 0
+_current_key_idx = 3 if len(GEMINI_API_KEYS) >= 4 and (datetime.now(YEMEN_TZ).hour >= 21 or datetime.now(YEMEN_TZ).hour < 9) else 0
 _model_stage_idx = 0
 
 
