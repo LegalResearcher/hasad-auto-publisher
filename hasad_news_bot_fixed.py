@@ -454,12 +454,11 @@ DAY_MODEL_CASCADE = [
 ]
 
 NIGHT_MODEL_CASCADE = [
-    "gemini-3.7-flash",
     "gemini-3.1-flash-lite",
     "gemini-3.5-flash-lite",
 ]
 
-NIGHT_MODE = datetime.now(YEMEN_TZ).hour >= 23 or datetime.now(YEMEN_TZ).hour < 10
+NIGHT_MODE = datetime.now(YEMEN_TZ).hour >= 1 and datetime.now(YEMEN_TZ).hour < 13
 MODEL_CASCADE = NIGHT_MODEL_CASCADE if NIGHT_MODE else DAY_MODEL_CASCADE
 
 _current_group_idx = 0
