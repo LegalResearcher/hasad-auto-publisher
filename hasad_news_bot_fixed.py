@@ -445,13 +445,23 @@ FALLBACK_MODEL = "gemini-3.5-flash"
 # (3.6)، ثم 3.5، ثم 2.5 (الجيل الأقدم)، ثم نسخ flash-lite الاقتصادية
 # من الأحدث للأقدم، وأخيراً gemini-2.5-pro كملاذ أخير (أبطأ وأغلى، لكنه
 # لا يزال يعمل لو استُنفدت كل خيارات flash على كل المفاتيح).
-MODEL_CASCADE = [
+DAY_MODEL_CASCADE = [
     PRIMARY_MODEL,           # gemini-3.6-flash
     FALLBACK_MODEL,          # gemini-3.5-flash
     "gemini-3.7-flash",
     "gemini-3.5-flash-lite",
     "gemini-3.1-flash-lite",
 ]
+
+NIGHT_MODEL_CASCADE = [
+    "gemini-3.7-flash",
+    "gemini-3.1-flash-lite",
+    "gemini-3.5-flash-lite",
+    FALLBACK_MODEL,           # gemini-3.5-flash
+    PRIMARY_MODEL,            # gemini-3.6-flash
+]
+
+MODEL_CASCADE = NIGHT_MODEL_CASCADE if (datetime.now(YEMEN_TZ).hour >= 21 or datetime.now(YEMEN_TZ).hour < 9) else DAY_MODEL_CASCADE
 
 _current_group_idx = 0
 _current_key_idx = 3 if len(GEMINI_API_KEYS) >= 4 and (datetime.now(YEMEN_TZ).hour >= 21 or datetime.now(YEMEN_TZ).hour < 9) else 0
