@@ -463,7 +463,7 @@ NIGHT_MODE = datetime.now(YEMEN_TZ).hour >= 21 or datetime.now(YEMEN_TZ).hour < 
 MODEL_CASCADE = NIGHT_MODEL_CASCADE if NIGHT_MODE else DAY_MODEL_CASCADE
 
 _current_group_idx = 0
-_current_key_idx = 3 if len(GEMINI_API_KEYS) >= 4 and NIGHT_MODE else 0
+_current_key_idx = len(GEMINI_API_KEYS) - 1 if GEMINI_API_KEYS and NIGHT_MODE else 0
 _model_stage_idx = 0
 
 
