@@ -340,7 +340,7 @@ def send_to_telegram(
                 "photo": image_url,
                 "caption": caption,
                 "parse_mode": "HTML",
-                "show_caption_above_media": True,
+                "show_caption_above_media": False,
             }
             response = requests.post(url, json=payload, timeout=REQUEST_TIMEOUT)
             if response.status_code == 200:
