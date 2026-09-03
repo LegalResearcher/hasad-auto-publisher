@@ -282,26 +282,75 @@ SYSTEM_LOGS_ALERT_THRESHOLD = 50_000
 SITE_BASE_URL = "https://www.hasad-alyoum.com"
 
 
-def send_to_telegram(title: str, article_url: str) -> bool:
+TELEGRAM_CAPTION_LIMIT = 1024
+
+
+def send_to_telegram(
+    title: str,
+    article_url: str,
+    excerpt: str = "",
+    image_url: Optional[str] = None,
+) -> bool:
     if not TELEGRAM_ENABLED or not TELEGRAM_BOT_TOKEN:
         return False
-    text = (
-        f"{title}\n\n"
-        f'أقرأ التفاصيل من "حصاد اليوم": {article_url}\n\n'
-        f"📲 تابعونا على:  ⤵\n\n"
-        f"✅ تيليجرام: https://t.me/hasadalyoum"
+
+    safe_title = html.escape((title or "").strip())
+    safe_excerpt = html.escape((excerpt or "").strip())
+    safe_article_url = html.escape(article_url or "", quote=True)
+    channel_url = "https://t.me/hasadalyoum"
+    footer = (
+        f'\n\nــــــــــــــــــــــــــــ\n\n'
+        f'🔗 اقرأ الخبر كاملاً عبر موقع حصاد اليوم:\n{safe_article_url}\n\n'
+        f'📲 للاشتراك بالقناة عبر تيليجرام:\n{channel_url}'
     )
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHANNEL_ID, "text": text}
+
+    def build_caption(summary: str) -> str:
+        expandable = f"\n\n<blockquote expandable>{summary}</blockquote>" if summary else ""
+        return f"<b>{safe_title}</b>{expandable}{footer}"
+
+    caption = build_caption(safe_excerpt)
+    if len(caption) > TELEGRAM_CAPTION_LIMIT and safe_excerpt:
+        available = max(0, TELEGRAM_CAPTION_LIMIT - len(build_caption("")) - 40)
+        safe_excerpt = safe_excerpt[:available].rstrip() + "…" if available else ""
+        caption = build_caption(safe_excerpt)
+
+    def send_text_fallback() -> bool:
+        text = build_caption(safe_excerpt)
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        payload = {
+            "chat_id": TELEGRAM_CHANNEL_ID,
+            "text": text,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+        }
+        try:
+            response = requests.post(url, json=payload, timeout=REQUEST_TIMEOUT)
+            if response.status_code == 200:
+                return True
+            log.warning(f"  ⚠️  فشل fallback إرسال تليجرام [{response.status_code}]: {response.text[:200]}")
+        except requests.RequestException as exc:
+            log.warning(f"  ⚠️  خطأ fallback إرسال تليجرام: {exc}")
+        return False
+
     try:
-        r = requests.post(url, json=payload, timeout=REQUEST_TIMEOUT)
-        if r.status_code == 200:
-            return True
-        log.warning(f"  ⚠️  فشل إرسال تليجرام [{r.status_code}]: {r.text[:200]}")
-        return False
-    except requests.RequestException as e:
-        log.warning(f"  ⚠️  خطأ إرسال تليجرام: {e}")
-        return False
+        if image_url and image_url.startswith(("https://", "http://")):
+            url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
+            payload = {
+                "chat_id": TELEGRAM_CHANNEL_ID,
+                "photo": image_url,
+                "caption": caption,
+                "parse_mode": "HTML",
+                "show_caption_above_media": True,
+            }
+            response = requests.post(url, json=payload, timeout=REQUEST_TIMEOUT)
+            if response.status_code == 200:
+                return True
+            log.warning(f"  ⚠️  فشل إرسال صورة تليجرام [{response.status_code}]: {response.text[:200]}")
+            return send_text_fallback()
+        return send_text_fallback()
+    except requests.RequestException as exc:
+        log.warning(f"  ⚠️  خطأ إرسال تليجرام: {exc}")
+        return send_text_fallback()
 
 
 def send_admin_alert(text: str) -> bool:
@@ -1891,7 +1940,12 @@ def check_and_notify_scheduled_posts() -> None:
                 entry["_views_seeded"] = True
             published_at = row.get("published_at") or entry.get("published_at") or entry.get("scheduled_at") or row.get("created_at") or entry.get("created_at")
             canonical_url = build_canonical_url(row.get("slug") or entry.get("slug"), published_at)
-            if send_to_telegram(entry.get("title", ""), canonical_url):
+            if send_to_telegram(
+                entry.get("title", ""),
+                canonical_url,
+                entry.get("excerpt", ""),
+                entry.get("featured_image"),
+            ):
                 log.info(f"  📢 نُشر فعلياً وأُرسل لتيليجرام الآن: {entry.get('title', '')[:60]}")
                 notified += 1
             else:
@@ -3462,13 +3516,20 @@ def main():
                 pending.append({
                     "id": post_id,
                     "title": record["title"],
+                    "excerpt": record["excerpt"],
                     "slug": record["slug"],
                     "created_at": record["created_at"],
                     "scheduled_at": publish_time,
+                    "featured_image": record.get("featured_image"),
                 })
                 save_pending_scheduled(pending)
             else:
-                send_to_telegram(record["title"], canonical_url)
+                send_to_telegram(
+                    record["title"],
+                    canonical_url,
+                    record.get("excerpt", ""),
+                    record.get("featured_image"),
+                )
                 log_discovery_ready([canonical_url])
         else:
             fail += 1
