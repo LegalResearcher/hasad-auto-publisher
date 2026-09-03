@@ -392,7 +392,12 @@ def run():
             # اكتشاف الرابط الفعلي يتم لاحقاً وبشكل مستقل تماماً عبر
             # سكربت hasad_telegram_scraper.py الذي يزحف على الصفحة
             # العامة لمعاينة القناة (t.me/s/hasadalyoum).
-            send_to_telegram(f"{post_category} - {record['title']}", canonical_url)
+            send_to_telegram(
+                record["title"],
+                canonical_url,
+                record.get("excerpt", ""),
+                record.get("featured_image"),
+            )
 
             log_discovery_ready([canonical_url])
         else:
