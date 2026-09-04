@@ -454,32 +454,38 @@ def log_discovery_ready(urls: list) -> None:
         log.info(f"  🔎 جاهز للاكتشاف عبر الرابط الكنسي وSitemap وRSS ({len(urls)} رابط)")
 
 # ══════════════════════════════════════════════════════════════════════
-#  🔑 مفاتيح Gemini — تُقرأ حصراً من GEMINI_API_KEYS (GitHub Secrets أو
-#  متغير بيئة أو secrets.json)، بدون أي مفاتيح أولوية منفصلة.
+#  🔑 مفاتيح Gemini — تُقرأ من GEMINI_API_KEYS (مفصولة بفواصل)، أو من
+#  GEMINI_API_KEY_GROUPS عند الحاجة إلى مجموعات متعددة (المجموعات مفصولة
+#  بفاصلة منقوطة، ومفاتيح كل مجموعة مفصولة بفواصل).
 # ══════════════════════════════════════════════════════════════════════
 GEMINI_API_KEYS = [k.strip() for k in _secret("GEMINI_API_KEYS").split(",") if k.strip()]
 
-# ══════════════════════════════════════════════════════════════════════
-#  🔑 مجموعة المفاتيح لمنطق call_with_rotation: مجموعة واحدة فقط تضم كل
-#  مفاتيح GEMINI_API_KEYS بترتيبها كما وردت بالسر. تُستنفد عبر كل مراحل
-#  MODEL_CASCADE بالترتيب.
-# ══════════════════════════════════════════════════════════════════════
-KEY_GROUPS = [GEMINI_API_KEYS] if GEMINI_API_KEYS else []
+
+def _load_gemini_key_groups() -> list[list[str]]:
+    grouped_raw = _secret("GEMINI_API_KEY_GROUPS").strip()
+    if grouped_raw:
+        groups = [
+            [key.strip() for key in group.split(",") if key.strip()]
+            for group in grouped_raw.split(";")
+        ]
+        return [group for group in groups if group]
+    return [GEMINI_API_KEYS] if GEMINI_API_KEYS else []
+
+
+KEY_GROUPS = _load_gemini_key_groups()
 
 # ══════════════════════════════════════════════════════════════════════
 #  🔑 منطق تدوير المفاتيح/النماذج (تدوير على مراحل متعددة، وليس مرحلتين
 #  فقط كما كان سابقاً):
 #
-#  كل مرحلة تمثّل نموذجاً واحداً من MODEL_CASCADE بالترتيب. يبدأ بالمفتاح
-#  الأول + أول نموذج بالقائمة (PRIMARY_MODEL). عند انتهاء حصة مفتاح معيّن،
-#  ينتقل للمفتاح التالي **بنفس النموذج الحالي** — يستمر كذلك حتى المفتاح
-#  الأخير.
-#
-#  عند استُنفاد حصة النموذج الحالي على كل المفاتيح العشرة، ينتقل للنموذج
-#  التالي بالقائمة (MODEL_CASCADE) بدءاً من المفتاح الأول من جديد، وهكذا
-#  حتى آخر نموذج بالقائمة. لو استُنفدت حصته أيضاً على كل المفاتيح، تُرفع
-#  الاستثناء نهائياً (لا مزيد من الخيارات لهذا التشغيل).
-#
+#  كل مرحلة تمثّل نموذجاً واحداً من MODEL_CASCADE بالترتيب. يبدأ الوضع
+#  النهاري بالمفتاح الأول من المجموعة الأولى، بينما يبدأ الوضع الليلي
+#  بالمفتاح الأخير من المجموعة الأولى. عند استنفاد النماذج على المفتاح،
+#  ينتقل إلى المفتاح التالي/السابق، ثم إلى المجموعة التالية/السابقة حسب
+#  الوضع، ولا ينتهي التشغيل إلا بعد استنفاد كل المجموعات والمفاتيح والنماذج.
+
+
+
 #  بداية كل تشغيل جديد للسكريبت (تشغيل تالٍ عبر cron مثلاً) تبدأ دائماً
 #  من الصفر (المفتاح الأول + أول نموذج بالقائمة) تلقائياً، لأن الحالة
 #  (_current_key_idx وَ_model_stage_idx) متغيرات وحدة عادية تُهيَّأ من
@@ -507,12 +513,25 @@ NIGHT_MODEL_CASCADE = [
     "gemini-3.5-flash-lite",
 ]
 
-NIGHT_MODE = datetime.now(YEMEN_TZ).hour >= 1 and datetime.now(YEMEN_TZ).hour < 13
-MODEL_CASCADE = NIGHT_MODEL_CASCADE if NIGHT_MODE else DAY_MODEL_CASCADE
+def is_night_mode(now_yemen: Optional[datetime] = None) -> bool:
+    """الفترة الليلية: من 00:00 حتى 13:59 بتوقيت اليمن."""
+    now_yemen = now_yemen or datetime.now(YEMEN_TZ)
+    if now_yemen.tzinfo is not None:
+        now_yemen = now_yemen.astimezone(YEMEN_TZ)
+    return now_yemen.hour < 14
 
-_current_group_idx = 0
-_current_key_idx = len(GEMINI_API_KEYS) - 1 if GEMINI_API_KEYS and NIGHT_MODE else 0
+
+_now_yemen = datetime.now(YEMEN_TZ)
+NIGHT_MODE = is_night_mode(_now_yemen)
+MODEL_CASCADE = NIGHT_MODEL_CASCADE if NIGHT_MODE else DAY_MODEL_CASCADE
+_current_group_idx = len(KEY_GROUPS) - 1 if KEY_GROUPS and NIGHT_MODE else 0
+_current_key_idx = (
+    len(KEY_GROUPS[_current_group_idx]) - 1
+    if KEY_GROUPS and NIGHT_MODE
+    else 0
+)
 _model_stage_idx = 0
+
 
 
 def current_model() -> str:
@@ -3081,7 +3100,7 @@ def call_with_rotation(prompt_text: str, schema: dict = None) -> str:
             else:
                 log.warning(
                     f"  🛑 انتهت الحصة اليومية ({current_model()}) "
-                    f"[مجموعة {group_label} - مفتاح {_current_key_idx + 1}/{len(current_group)}]"
+                    f"[{group_label} - مفتاح {_current_key_idx + 1}/{len(current_group)}]"
                 )
 
             if NIGHT_MODE:
@@ -3101,7 +3120,17 @@ def call_with_rotation(prompt_text: str, schema: dict = None) -> str:
                         f"بدءاً من {current_model()}."
                     )
                     continue
-                log.error("  ❌ استُنفدت مفاتيح ونماذج الفترة الليلية بالكامل.")
+                if _current_group_idx > 0:
+                    _current_group_idx -= 1
+                    _current_key_idx = len(KEY_GROUPS[_current_group_idx]) - 1
+                    _model_stage_idx = 0
+                    log.warning(
+                        f"  🌙 استُنفدت المجموعة الحالية — الانتقال إلى "
+                        f"المجموعة {_current_group_idx + 1}/{len(KEY_GROUPS)} "
+                        f"من آخر مفتاح وبدءاً من {current_model()}."
+                    )
+                    continue
+                log.error("  ❌ استُنفدت كل مجموعات ومفاتيح ونماذج الفترة الليلية بالكامل.")
                 raise
 
             if _model_stage_idx + 1 < len(MODEL_CASCADE):
@@ -3124,13 +3153,23 @@ def call_with_rotation(prompt_text: str, schema: dict = None) -> str:
                     f"بدءاً من {current_model()}."
                 )
                 continue
-
+            if _current_group_idx + 1 < len(KEY_GROUPS):
+                _current_group_idx += 1
+                _current_key_idx = 0
+                _model_stage_idx = 0
+                log.warning(
+                    f"  🔑 استُنفدت المجموعة الحالية — الانتقال إلى "
+                    f"المجموعة {_current_group_idx + 1}/{len(KEY_GROUPS)} "
+                    f"من أول مفتاح وبدءاً من {current_model()}."
+                )
+                continue
             # استُنفدت كل المجموعات وكل المفاتيح على كل النماذج — لا مزيد
             # من الخيارات لهذا التشغيل، تُرفع الاستثناء للمتصل.
             log.error(
                 f"  ❌ استُنفدت كل مجموعات المفاتيح وكل النماذج — لا مزيد من الخيارات."
             )
             raise
+
 
 
 def rewrite_article(title: str, body: str, category: str = "") -> Optional[dict]:

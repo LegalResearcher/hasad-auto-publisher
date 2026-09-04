@@ -48,4 +48,5 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           GEMINI_PRIORITY_KEYS: ${{ secrets.GEMINI_PRIORITY_KEYS }}
           GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
+          GEMINI_API_KEY_GROUPS: ${{ secrets.GEMINI_API_KEY_GROUPS }}
         run: python auto_publish_alittihad_alkhabar.py
