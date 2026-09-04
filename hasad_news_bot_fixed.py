@@ -400,27 +400,27 @@ def seed_views(post_id: str) -> None:
         is_news_reports = bool(news_reports_id) and post.get("category_id") == news_reports_id
 
         if is_news_reports:
-            # المنطق الأصلي (مُضاعَف×2): يُطبّق فقط على قسم "أخبار وتقارير"
-            if current < 300:
+            # المنطق الأصلي (مُضاعَف×3): يُطبّق فقط على قسم "أخبار وتقارير"
+            if current < 450:
                 if diff_min < 60:
-                    final = random.randint(300, 776)
+                    final = random.randint(450, 1164)
                 elif diff_min < 300:
-                    final = random.randint(910, 1400)
+                    final = random.randint(1365, 2100)
                 else:
-                    final = random.randint(1200, 3000)
+                    final = random.randint(1800, 4500)
             else:
-                final = current + random.randint(20, 118)
+                final = current + random.randint(30, 177)
         else:
-            # نفس بنية المنطق (تقسيم زمني ثلاثي) لكن بنطاقات مصغّرة مُضاعَفة×2 (252-1366) لباقي الأقسام
-            if current < 252:
+            # نفس بنية المنطق (تقسيم زمني ثلاثي) لكن بنطاقات مصغّرة مُضاعَفة×4 (504-2732) لباقي الأقسام
+            if current < 504:
                 if diff_min < 60:
-                    final = random.randint(252, 500)
+                    final = random.randint(504, 1000)
                 elif diff_min < 300:
-                    final = random.randint(502, 900)
+                    final = random.randint(1004, 1800)
                 else:
-                    final = random.randint(902, 1366)
+                    final = random.randint(1804, 2732)
             else:
-                final = min(1366, current + random.randint(10, 50))
+                final = min(2732, current + random.randint(20, 100))
 
         patch_url = f"{SUPABASE_URL}/rest/v1/{TABLE_NAME}?id=eq.{post_id}"
         pr = requests.patch(patch_url, headers=sb_headers(), json={"views_count": final}, timeout=REQUEST_TIMEOUT)
