@@ -127,7 +127,7 @@ RSS_SKYNEWS_TECH_URL = "https://www.skynewsarabia.com/web/rss/technology.xml"
 RSS_SKYNEWS_WORLD_URL = "http://www.skynewsarabia.com/web/rss/world.xml"
 
 SELECTED_FEEDS = {
-    # RSS_MASA_URL: TARGET_CATEGORY,  # موقوف مؤقتاً
+    RSS_MASA_URL: TARGET_CATEGORY,
     # RSS_ALITTIHAD_FULL_URL: TARGET_CATEGORY,  # موقوف مؤقتاً
     # RSS_ALKHABAR_FULL_URL: TARGET_CATEGORY,  # موقوف مؤقتاً
     RSS_YPAGENCY_FULL_URL: RSS_YPAGENCY_FULL_CATEGORY,
