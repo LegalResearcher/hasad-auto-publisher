@@ -3255,7 +3255,7 @@ def choose_auto_mode() -> bool:
 def choose_full_extraction_feeds() -> dict:
     feed_options = {
         "1": (RSS_MASA_URL, RSS_MASA_CATEGORY, "المساء"),
-        "2": (RSS_ALITTIHAD_FULL_URL, RSS_ALITTIHAD_FULL_CATEGORY, "الاتحاد برس"),
+        # "2": (RSS_ALITTIHAD_FULL_URL, RSS_ALITTIHAD_FULL_CATEGORY, "الاتحاد برس"),  # موقوف مؤقتاً
         # "3": (RSS_ALKHABAR_FULL_URL, RSS_ALKHABAR_FULL_CATEGORY, "الخبر اليمني"),  # موقوف مؤقتاً
     }
     if ADEN_TM_ENABLED:
