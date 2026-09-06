@@ -91,7 +91,7 @@ except ImportError:  # pragma: no cover
 #  ⚙️  الإعدادات — عدّل هنا فقط
 # ══════════════════════════════════════════════════════════════════════
 
-ADEN_TM_ENABLED = True
+ADEN_TM_ENABLED = False  # موقوف مؤقتاً
 
 RSS_FEED_CATEGORIES = {
     "/storage/emulated/0/Download/hasad_bot/aden-tm-akhbar-wataqarir.xml": "أخبار وتقارير",
