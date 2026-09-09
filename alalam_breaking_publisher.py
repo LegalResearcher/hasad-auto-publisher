@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import json
 import requests
 from bs4 import BeautifulSoup
 from urllib3.exceptions import InsecureRequestWarning
@@ -31,7 +32,8 @@ BREAKING_CATEGORY = "الأخبار العاجلة"
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_PUBLISH_ENABLED = False  # إيقاف نشر الأخبار العاجلة إلى تيليجرام فقط
 TELEGRAM_CHANNEL_ID = os.environ.get("TELEGRAM_CHANNEL_ID", "@hasadalyoum")
-REQUEST_TIMEOUT = 20
+REQUEST_TIMEOUT = 30
+TICKER_JSON_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "breaking-news.json")
 # شهادة alalam.ir منتهية حالياً؛ تعطيل التحقق لهذا المصدر وحده مؤقتاً
 # حتى لا يتوقف التقاط الأخبار العاجلة قبل تجديد شهادة الموقع.
 SOURCE_VERIFY_TLS = False
@@ -120,46 +122,15 @@ def extract_items(lines: list[str]) -> list[dict[str, str | None]]:
 
 
 def update_breaking_ticker(headlines: list[str]) -> None:
-    """يجعل شريط العاجل يعرض عدة عناوين ضمن سجل واحد.
-
-    واجهة الموقع تعرض سجل الشريط النشط الأحدث؛ لذلك لا يكفي إدخال كل عنوان
-    كسجل مستقل. ندمج أحدث العناوين في نص واحد ونخفي السجل السابق.
-    """
+    """يحفظ آخر ثلاثة عناوين في ملف ثابت خارج Supabase."""
     headlines = [headline.strip() for headline in headlines if headline and headline.strip()]
+    headlines = headlines[:3]
     if not headlines:
         return
-
-    deactivate_response = requests.patch(
-        f"{SUPABASE_URL}/rest/v1/breaking_news?is_active=eq.true",
-        headers={
-            "apikey": SUPABASE_SERVICE_KEY,
-            "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
-            "Content-Type": "application/json",
-            "Prefer": "return=minimal",
-        },
-        json={"is_active": False},
-        timeout=REQUEST_TIMEOUT,
-    )
-    if deactivate_response.status_code not in (200, 204):
-        raise RuntimeError(
-            f"breaking_news deactivate failed [{deactivate_response.status_code}]: "
-            f"{deactivate_response.text[:300]}"
-        )
-
-    ticker_text = "  •  ".join(headlines[:3])
-    response = requests.post(
-        f"{SUPABASE_URL}/rest/v1/breaking_news",
-        headers={
-            "apikey": SUPABASE_SERVICE_KEY,
-            "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
-            "Content-Type": "application/json",
-            "Prefer": "return=minimal",
-        },
-        json={"text": ticker_text, "is_active": True, "display_order": 0},
-        timeout=REQUEST_TIMEOUT,
-    )
-    if response.status_code not in (200, 201, 204):
-        raise RuntimeError(f"breaking_news insert failed [{response.status_code}]: {response.text[:300]}")
+    payload = {"updated_at": datetime.now(timezone.utc).isoformat(), "items": headlines}
+    with open(TICKER_JSON_PATH, "w", encoding="utf-8") as file:
+        json.dump(payload, file, ensure_ascii=False, indent=2)
+        file.write("\n")
 
 
 def send_to_telegram(headline: str) -> None:
