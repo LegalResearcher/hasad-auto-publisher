@@ -146,7 +146,7 @@ def update_breaking_ticker(headlines: list[str]) -> None:
             f"{deactivate_response.text[:300]}"
         )
 
-    ticker_text = "  •  ".join(headlines[:10])
+    ticker_text = "  •  ".join(headlines[:3])
     response = requests.post(
         f"{SUPABASE_URL}/rest/v1/breaking_news",
         headers={
@@ -236,7 +236,9 @@ def publish_breaking_news() -> int:
         if headline:
             published_headlines.append(headline)
     if published_headlines:
-        update_breaking_ticker(published_headlines)
+        # items مرتبة من الأقدم إلى الأحدث؛ اعرض أحدث ثلاثة فقط، والأحدث أولاً.
+        latest_headlines = list(reversed(published_headlines[-3:]))
+        update_breaking_ticker(latest_headlines)
     save_history(history)
     print(f"Alalam breaking publisher: {published} new item(s) published")
     return published
