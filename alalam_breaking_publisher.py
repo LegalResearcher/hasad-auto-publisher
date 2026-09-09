@@ -127,6 +127,13 @@ def update_breaking_ticker(headlines: list[str]) -> None:
     headlines = headlines[:3]
     if not headlines:
         return
+    try:
+        with open(TICKER_JSON_PATH, encoding="utf-8") as file:
+            current = json.load(file)
+        if current.get("items") == headlines:
+            return
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        pass
     payload = {"updated_at": datetime.now(timezone.utc).isoformat(), "items": headlines}
     with open(TICKER_JSON_PATH, "w", encoding="utf-8") as file:
         json.dump(payload, file, ensure_ascii=False, indent=2)
