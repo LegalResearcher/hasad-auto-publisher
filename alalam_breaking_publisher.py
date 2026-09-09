@@ -29,6 +29,7 @@ from hasad_news_bot_fixed import (
 BREAKING_NEWS_URL = "https://www.alalam.ir/urgent"
 BREAKING_CATEGORY = "الأخبار العاجلة"
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_PUBLISH_ENABLED = False  # إيقاف نشر الأخبار العاجلة إلى تيليجرام فقط
 TELEGRAM_CHANNEL_ID = os.environ.get("TELEGRAM_CHANNEL_ID", "@hasadalyoum")
 REQUEST_TIMEOUT = 20
 # شهادة alalam.ir منتهية حالياً؛ تعطيل التحقق لهذا المصدر وحده مؤقتاً
@@ -162,7 +163,7 @@ def update_breaking_ticker(headlines: list[str]) -> None:
 
 
 def send_to_telegram(headline: str) -> None:
-    if not TELEGRAM_BOT_TOKEN:
+    if not TELEGRAM_PUBLISH_ENABLED or not TELEGRAM_BOT_TOKEN:
         return
     response = requests.post(
         f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
