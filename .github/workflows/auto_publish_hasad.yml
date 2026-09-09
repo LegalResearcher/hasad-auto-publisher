@@ -1,8 +1,6 @@
 name: نشر تلقائي - حصاد اليوم
 
 on:
-  schedule:
-    - cron: "*/5 * * * *"   # فحص الأخبار العاجلة وكل المصادر كل خمس دقائق
   repository_dispatch:
     types: [supabase-publish]
   workflow_dispatch: {}     # يسمح بتشغيل يدوي فوري من تبويب Actions للاختبار
@@ -48,7 +46,6 @@ jobs:
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
           GEMINI_PRIORITY_KEYS: ${{ secrets.GEMINI_PRIORITY_KEYS }}
           GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
           GEMINI_API_KEY_GROUPS: ${{ secrets.GEMINI_API_KEY_GROUPS }}
