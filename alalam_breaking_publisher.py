@@ -118,7 +118,34 @@ def extract_items(lines: list[str]) -> list[dict[str, str | None]]:
     return items
 
 
-def insert_breaking_ticker(text: str, display_order: int) -> None:
+def update_breaking_ticker(headlines: list[str]) -> None:
+    """يجعل شريط العاجل يعرض عدة عناوين ضمن سجل واحد.
+
+    واجهة الموقع تعرض سجل الشريط النشط الأحدث؛ لذلك لا يكفي إدخال كل عنوان
+    كسجل مستقل. ندمج أحدث العناوين في نص واحد ونخفي السجل السابق.
+    """
+    headlines = [headline.strip() for headline in headlines if headline and headline.strip()]
+    if not headlines:
+        return
+
+    deactivate_response = requests.patch(
+        f"{SUPABASE_URL}/rest/v1/breaking_news?is_active=eq.true",
+        headers={
+            "apikey": SUPABASE_SERVICE_KEY,
+            "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+            "Content-Type": "application/json",
+            "Prefer": "return=minimal",
+        },
+        json={"is_active": False},
+        timeout=REQUEST_TIMEOUT,
+    )
+    if deactivate_response.status_code not in (200, 204):
+        raise RuntimeError(
+            f"breaking_news deactivate failed [{deactivate_response.status_code}]: "
+            f"{deactivate_response.text[:300]}"
+        )
+
+    ticker_text = "  •  ".join(headlines[:10])
     response = requests.post(
         f"{SUPABASE_URL}/rest/v1/breaking_news",
         headers={
@@ -127,7 +154,7 @@ def insert_breaking_ticker(text: str, display_order: int) -> None:
             "Content-Type": "application/json",
             "Prefer": "return=minimal",
         },
-        json={"text": text, "is_active": True, "display_order": display_order},
+        json={"text": ticker_text, "is_active": True, "display_order": 0},
         timeout=REQUEST_TIMEOUT,
     )
     if response.status_code not in (200, 201, 204):
@@ -185,7 +212,6 @@ def publish_item(item: dict[str, str | None], category_id: str, existing_urls: s
     post_id = sb_insert(record)
     if not post_id:
         return False
-    insert_breaking_ticker(headline, 0)
     seed_views(post_id)
     history.add(fingerprint)
     existing_urls.add(source_url)
@@ -201,9 +227,15 @@ def publish_breaking_news() -> int:
     history = load_history()
     existing_urls = get_existing_source_urls()
     published = 0
+    published_headlines: list[str] = []
     for item in items:
         if publish_item(item, category_id, existing_urls, history):
             published += 1
+        headline = str(item.get("headline") or "").strip()
+        if headline:
+            published_headlines.append(headline)
+    if published_headlines:
+        update_breaking_ticker(published_headlines)
     save_history(history)
     print(f"Alalam breaking publisher: {published} new item(s) published")
     return published
