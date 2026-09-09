@@ -13,6 +13,7 @@ from typing import Any
 
 import requests
 from bs4 import BeautifulSoup
+from urllib3.exceptions import InsecureRequestWarning
 
 from hasad_news_bot_fixed import (
     SUPABASE_SERVICE_KEY,
@@ -30,6 +31,10 @@ BREAKING_CATEGORY = "الأخبار العاجلة"
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHANNEL_ID = os.environ.get("TELEGRAM_CHANNEL_ID", "@hasadalyoum")
 REQUEST_TIMEOUT = 20
+# شهادة alalam.ir منتهية حالياً؛ تعطيل التحقق لهذا المصدر وحده مؤقتاً
+# حتى لا يتوقف التقاط الأخبار العاجلة قبل تجديد شهادة الموقع.
+SOURCE_VERIFY_TLS = False
+requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
 HISTORY_FILE = Path(__file__).with_name("alalam_breaking_history.json")
 MAX_HISTORY_ITEMS = 500
 SEND_DELAY_SECONDS = 2
@@ -70,7 +75,12 @@ def item_hash(text: str) -> str:
 
 
 def fetch_page_lines() -> list[str]:
-    response = requests.get(BREAKING_NEWS_URL, headers=HEADERS, timeout=REQUEST_TIMEOUT)
+    response = requests.get(
+        BREAKING_NEWS_URL,
+        headers=HEADERS,
+        timeout=REQUEST_TIMEOUT,
+        verify=SOURCE_VERIFY_TLS,
+    )
     response.raise_for_status()
     soup = BeautifulSoup(response.text, "html.parser")
     for tag in soup(["script", "style", "noscript"]):
