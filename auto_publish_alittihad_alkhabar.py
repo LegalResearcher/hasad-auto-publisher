@@ -21,6 +21,7 @@ LOCK_FILE_PATH = os.path.join(_DATA_DIR, "auto_publish_alittihad_alkhabar.lock")
 
 sys.path.insert(0, _SCRIPT_DIR)
 
+from alalam_breaking_publisher import publish_breaking_news
 from hasad_news_bot_fixed import (
     log,
     RSS_MASA_URL,
@@ -246,6 +247,13 @@ def run():
 
     check_system_logs_size()
     check_and_notify_scheduled_posts()
+
+    try:
+        breaking_count = publish_breaking_news()
+        log.info(f"🚨 ناشر الأخبار العاجلة: تم نشر {breaking_count} خبرًا جديدًا")
+    except Exception as exc:
+        # فشل مصدر الأخبار العاجلة لا يعطل النشر المعتاد لبقية الفيدات.
+        log.error(f"🚨 تعذّر تشغيل ناشر الأخبار العاجلة: {exc}")
 
     existing_urls = get_existing_source_urls()
     blocked_links = load_blocked_links()
