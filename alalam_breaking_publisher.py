@@ -29,6 +29,8 @@ from hasad_news_bot_fixed import (
 
 BREAKING_NEWS_URL = "https://www.alalam.ir/urgent"
 BREAKING_CATEGORY = "الأخبار العاجلة"
+# إيقاف مؤقت لناشر فيد العالم فقط؛ لا يؤثر على بقية مصادر النشر.
+ALALAM_PUBLISH_ENABLED = False
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_PUBLISH_ENABLED = False  # إيقاف نشر الأخبار العاجلة إلى تيليجرام فقط
 TELEGRAM_CHANNEL_ID = os.environ.get("TELEGRAM_CHANNEL_ID", "@hasadalyoum")
@@ -199,6 +201,9 @@ def publish_item(item: dict[str, str | None], category_id: str, existing_urls: s
 
 
 def publish_breaking_news() -> int:
+    if not ALALAM_PUBLISH_ENABLED:
+        print("Alalam breaking publisher: temporarily paused")
+        return 0
     category_id = get_category_id(BREAKING_CATEGORY)
     if not category_id:
         raise RuntimeError(f"Category not found: {BREAKING_CATEGORY}")
