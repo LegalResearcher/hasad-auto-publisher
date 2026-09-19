@@ -117,6 +117,11 @@ RSS_ALKHABAR_FULL_CATEGORY = "أخبار وتقارير"
 RSS_YPAGENCY_FULL_URL = "https://www.ypagency.net/category/%d8%a7%d9%84%d9%8a%d9%85%d9%86/feed"
 RSS_YPAGENCY_FULL_CATEGORY = "أخبار وتقارير"
 
+# فيد وكالة الصحافة اليمنية — قسم المحافظات المحتلة، بنفس منطق فيد المساء
+# برس: استخراج كامل، والنشر في قسم أخبار وتقارير، وبنفس منطق فيد /اليمن.
+RSS_YPAGENCY_OCCUPIED_PROVINCES_URL = "https://www.ypagency.net/category/%d8%a7%d9%84%d9%85%d8%ad%d8%a7%d9%81%d8%b8%d8%a7%d8%aa-%d8%a7%d9%84%d9%85%d8%ad%d8%aa%d9%84%d8%a9/feed"
+RSS_YPAGENCY_OCCUPIED_PROVINCES_CATEGORY = "أخبار وتقارير"
+
 BLOCKED_KEYWORDS = ["مواقيت الأذان", "مليشيا"]
 
 RSS_YPAGENCY_GLOBAL_URL = "https://www.ypagency.net/category/%d8%af%d9%88%d9%84%d9%8a/feed"
@@ -800,7 +805,13 @@ def contains_blocked_keyword(title: str, body: str) -> bool:
     return any(kw in combined for kw in BLOCKED_KEYWORDS)
 
 
-BLOCKED_KEYWORDS_EXEMPT_SOURCES = {RSS_MASA_URL, RSS_ALITTIHAD_FULL_URL, RSS_ALKHABAR_FULL_URL, RSS_YPAGENCY_FULL_URL}
+BLOCKED_KEYWORDS_EXEMPT_SOURCES = {
+    RSS_MASA_URL,
+    RSS_ALITTIHAD_FULL_URL,
+    RSS_ALKHABAR_FULL_URL,
+    RSS_YPAGENCY_FULL_URL,
+    RSS_YPAGENCY_OCCUPIED_PROVINCES_URL,
+}
 
 # ══════════════════════════════════════════════════════════════════════
 #  🚫 أخبار "عاجل" من وكالة الصحافة اليمنية — نشرات سريعة جداً بلا صور
@@ -808,7 +819,10 @@ BLOCKED_KEYWORDS_EXEMPT_SOURCES = {RSS_MASA_URL, RSS_ALITTIHAD_FULL_URL, RSS_ALK
 #  من هذا الفيد تحديداً قبل أي معالجة أخرى (لا تُرسل لـ Gemini ولا تُنشر).
 # ══════════════════════════════════════════════════════════════════════
 
-BREAKING_NEWS_FILTER_SOURCES = {RSS_YPAGENCY_FULL_URL}
+BREAKING_NEWS_FILTER_SOURCES = {
+    RSS_YPAGENCY_FULL_URL,
+    RSS_YPAGENCY_OCCUPIED_PROVINCES_URL,
+}
 BREAKING_NEWS_TITLE_MARKERS = ("عاجل",)
 BREAKING_NEWS_MAX_BODY_LEN = 300  # نصوص أطول من هذا تُعتبر خبراً مكتملاً وليس نشرة سريعة، حتى لو بدأ عنوانها بـ"عاجل"
 
