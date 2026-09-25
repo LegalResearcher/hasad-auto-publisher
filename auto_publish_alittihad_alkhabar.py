@@ -88,6 +88,12 @@ from hasad_news_bot_fixed import (
     HEADLINE_DESIGN_ENABLED,
 )
 import json
+from telegram_source import (
+    TelegramFileTooLargeError,
+    commit_telegram_cursor,
+    download_telegram_photo,
+    fetch_telegram_items,
+)
 
 # ══════════════════════════════════════════════════════════════════════
 #  🔒 نسخة تلقائية مقيّدة — تعمل فقط على فيدات:
@@ -263,7 +269,18 @@ def run():
     recent_published = get_recent_published_titles(hours=24)
     recent_raw = get_recent_raw_items()
 
+    telegram_cursor = None
+    telegram_source_error = None
+    try:
+        telegram_items, telegram_cursor = fetch_telegram_items()
+        log.info(f"📨 منشورات تيليجرام الجديدة من قناة حصاد: {len(telegram_items)}")
+    except Exception as exc:
+        telegram_items = []
+        telegram_source_error = exc
+        log.error(f"❌ تعذّر جلب منشورات قناة Telegram المصدر: {exc}")
+
     items = collect_recent_items(SELECTED_FEEDS)
+    items.extend(telegram_items)
     new_items = [
         it for it in items
         if it["link"] not in existing_urls and it["link"] not in blocked_links
@@ -300,6 +317,10 @@ def run():
 
     if not new_items:
         log.info("لا يوجد أخبار جديدة حالياً.")
+        if telegram_cursor is not None:
+            commit_telegram_cursor(telegram_cursor)
+        if telegram_source_error:
+            raise RuntimeError("Telegram source polling failed; see the logged error above.") from telegram_source_error
         return
 
     apply_full_extraction(new_items)
@@ -307,6 +328,10 @@ def run():
 
     if not new_items:
         log.info("لا يوجد أخبار جديدة حالياً بعد الاستبعاد.")
+        if telegram_cursor is not None:
+            commit_telegram_cursor(telegram_cursor)
+        if telegram_source_error:
+            raise RuntimeError("Telegram source polling failed; see the logged error above.") from telegram_source_error
         return
 
     ok = fail = skipped = 0
@@ -332,7 +357,7 @@ def run():
 
         post_category = (
             INTERNATIONAL_CATEGORY
-            if news_scope == "دولي" and base_category not in (SPORT_CATEGORY, TECH_CATEGORY, WORLD_CATEGORY, RSS_YPAGENCY_OCCUPIED_PALESTINE_CATEGORY)
+            if not it.get("_telegram_source") and news_scope == "دولي" and base_category not in (SPORT_CATEGORY, TECH_CATEGORY, WORLD_CATEGORY)
             else base_category
         )
         if post_category == INTERNATIONAL_CATEGORY:
@@ -342,12 +367,27 @@ def run():
         formatted_content = format_content_paragraphs(final_content)
         item_date = it["pub_date"].isoformat()
 
+        telegram_image_bytes = None
+        if it.get("_telegram_photo_file_id"):
+            try:
+                telegram_image_bytes = download_telegram_photo(it["_telegram_photo_file_id"])
+            except TelegramFileTooLargeError as exc:
+                log.warning(f"  ⚠️  {exc} سيُنشر الخبر النصي دون صورة.")
+            except Exception as exc:
+                log.error(f"  ❌ تعذّر تنزيل صورة منشور Telegram؛ سيُعاد الخبر في التشغيل التالي: {exc}")
+                fail += 1
+                continue
+
         category_id = get_category_id(post_category)
         if not category_id:
             fail += 1
             continue
 
         if post_category in NO_IMAGE_CATEGORIES:
+            image_url, thumbnail_url = None, None
+        elif it.get("_telegram_source") and telegram_image_bytes is None:
+            # Telegram source links are private channel message URLs, not pages
+            # from which an article image/og:image can be scraped.
             image_url, thumbnail_url = None, None
         elif it.get("source_feed") == RSS_MASA_URL:
             image_url, thumbnail_url = get_masa_image_url(
@@ -356,6 +396,7 @@ def run():
         else:
             image_url, thumbnail_url = get_post_image_urls(
                 it.get("image_url"), it.get("link"), headline_text=final_title,
+                source_image_bytes=telegram_image_bytes,
             )
 
         record = {
@@ -417,6 +458,10 @@ def run():
     log.info("═" * 60)
     log.info(f"📊 نُشر: {ok} / فشل: {fail} / تُخُطّي: {skipped}")
     log.info("═" * 60)
+    if telegram_cursor is not None and fail == 0:
+        commit_telegram_cursor(telegram_cursor)
+    if telegram_source_error:
+        raise RuntimeError("Telegram source polling failed; see the logged error above.") from telegram_source_error
 
 
 def _acquire_lock_or_exit():
