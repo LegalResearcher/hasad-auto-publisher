@@ -1734,6 +1734,9 @@ def map_site_category(site_category: Optional[str]) -> Optional[str]:
 def apply_full_extraction(items: list[dict]) -> None:
     total = len(items)
     for idx, it in enumerate(items, start=1):
+        if it.get("_telegram_source"):
+            log.info("  ↳ منشور Telegram يحمل النص الخام كاملاً — تخطي جلب صفحة المصدر الخاصة.")
+            continue
         log.info(f"  🧲 [{idx}/{total}] استخراج الخبر الكامل: {it['link'][:80]}")
         result = extract_article(it["link"])
         if result and result.get("body") and len(result["body"]) >= MIN_ACCEPTABLE_LOCAL_LEN:
@@ -2862,7 +2865,7 @@ def get_post_image_url(
 
 def get_post_image_urls(
     source_image_url: Optional[str], article_url: Optional[str] = None,
-    headline_text: Optional[str] = None,
+    headline_text: Optional[str] = None, source_image_bytes: Optional[bytes] = None,
 ) -> tuple[Optional[str], Optional[str]]:
     """نفس خط أنابيب get_post_image_url بالضبط، لكن يعيد أيضاً رابط نسخة
     مصغّرة (thumbnail) تُستخدم في بطاقات القوائم بالواجهة بدل الصورة الكاملة.
@@ -2877,13 +2880,16 @@ def get_post_image_urls(
 
     Returns: (featured_url, thumbnail_url) — أي منهما قد يكون None عند الفشل.
     """
-    if not source_image_url and article_url:
-        source_image_url = fetch_og_image(article_url)
+    if source_image_bytes is not None:
+        raw_bytes = source_image_bytes
+    else:
+        if not source_image_url and article_url:
+            source_image_url = fetch_og_image(article_url)
 
-    if not source_image_url:
-        return None, None
+        if not source_image_url:
+            return None, None
 
-    raw_bytes = download_image_bytes(source_image_url)
+        raw_bytes = download_image_bytes(source_image_url)
     if not raw_bytes:
         return None, None
 
