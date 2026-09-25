@@ -54,6 +54,104 @@ class TelegramSourceItemTests(unittest.TestCase):
         self.assertEqual(item["raw_body"], "عنوان الصورة\nشرح الخبر")
         self.assertEqual(item["link"], f"https://t.me/c/{CHANNEL_ID[4:]}/43")
 
+    def test_photo_reply_uses_original_news_text_and_original_post_link(self):
+        update = {
+            "update_id": 9005,
+            "channel_post": {
+                "message_id": 46,
+                "date": 1790360100,
+                "chat": {"id": int(CHANNEL_ID)},
+                "photo": [{"file_id": "reply-photo", "width": 1200, "height": 900}],
+                "reply_to_message": {
+                    "message_id": 42,
+                    "date": 1790360000,
+                    "chat": {"id": int(CHANNEL_ID)},
+                    "text": "عنوان الخبر الأصلي\nتفاصيل الخبر الأصلي كاملة.",
+                },
+            },
+        }
+        item = source._to_news_item(update, CHANNEL_ID)
+        self.assertTrue(item["_telegram_photo_reply"])
+        self.assertEqual(item["title"], "عنوان الخبر الأصلي")
+        self.assertEqual(item["raw_body"], "عنوان الخبر الأصلي\nتفاصيل الخبر الأصلي كاملة.")
+        self.assertEqual(item["link"], f"https://t.me/c/{CHANNEL_ID[4:]}/42")
+        self.assertEqual(item["_telegram_photo_file_id"], "reply-photo")
+
+    def test_same_batch_reply_photo_is_merged_into_news_item(self):
+        original = source._to_news_item(
+            {
+                "update_id": 9006,
+                "channel_post": {
+                    "message_id": 47,
+                    "date": 1790360000,
+                    "chat": {"id": int(CHANNEL_ID)},
+                    "text": "عنوان خبر جديد\nمتن الخبر.",
+                },
+            },
+            CHANNEL_ID,
+        )
+        reply = source._to_news_item(
+            {
+                "update_id": 9007,
+                "channel_post": {
+                    "message_id": 48,
+                    "date": 1790360100,
+                    "chat": {"id": int(CHANNEL_ID)},
+                    "photo": [{"file_id": "reply-photo", "width": 1200, "height": 900}],
+                    "reply_to_message": {
+                        "message_id": 47,
+                        "date": 1790360000,
+                        "chat": {"id": int(CHANNEL_ID)},
+                        "text": "عنوان خبر جديد\nمتن الخبر.",
+                    },
+                },
+            },
+            CHANNEL_ID,
+        )
+        news, late = source.merge_photo_replies_with_news_items([original, reply])
+        self.assertEqual(len(news), 1)
+        self.assertEqual(late, [])
+        self.assertEqual(news[0]["_telegram_photo_file_id"], "reply-photo")
+        self.assertEqual(news[0]["_telegram_update_id"], 9007)
+
+    def test_already_published_story_routes_reply_to_late_path(self):
+        original = source._to_news_item(
+            {
+                "update_id": 9008,
+                "channel_post": {
+                    "message_id": 49,
+                    "date": 1790360000,
+                    "chat": {"id": int(CHANNEL_ID)},
+                    "text": "عنوان منشور مسبقًا",
+                },
+            },
+            CHANNEL_ID,
+        )
+        reply = source._to_news_item(
+            {
+                "update_id": 9009,
+                "channel_post": {
+                    "message_id": 50,
+                    "date": 1790360100,
+                    "chat": {"id": int(CHANNEL_ID)},
+                    "photo": [{"file_id": "reply-photo", "width": 1200, "height": 900}],
+                    "reply_to_message": {
+                        "message_id": 49,
+                        "date": 1790360000,
+                        "chat": {"id": int(CHANNEL_ID)},
+                        "text": "عنوان منشور مسبقًا",
+                    },
+                },
+            },
+            CHANNEL_ID,
+        )
+        news, late = source.merge_photo_replies_with_news_items(
+            [original, reply],
+            existing_source_urls={original["link"]},
+        )
+        self.assertEqual(len(news), 1)
+        self.assertEqual(late, [reply])
+
     def test_ignores_other_channels(self):
         update = {
             "update_id": 9003,

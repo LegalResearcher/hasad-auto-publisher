@@ -53,6 +53,7 @@ from hasad_news_bot_fixed import (
     check_system_logs_size,
     check_and_notify_scheduled_posts,
     get_existing_source_urls,
+    get_published_post_by_source_url,
     get_recent_published_titles,
     log_published_title,
     load_blocked_links,
@@ -86,6 +87,7 @@ from hasad_news_bot_fixed import (
     log_discovery_ready,
     apply_headline_design_to_image,
     HEADLINE_DESIGN_ENABLED,
+    update_published_post_cover_image,
 )
 import json
 from telegram_source import (
@@ -93,6 +95,7 @@ from telegram_source import (
     commit_telegram_cursor,
     download_telegram_photo,
     fetch_telegram_items,
+    merge_photo_replies_with_news_items,
 )
 
 # ══════════════════════════════════════════════════════════════════════
@@ -125,6 +128,81 @@ INTERNATIONAL_CATEGORY = "شؤون دولية"
 SPORT_CATEGORY = "رياضة"
 TECH_CATEGORY = "منوعات وتكنولوجيا"
 WORLD_CATEGORY = "أخبار العالم"
+
+
+def _process_late_telegram_photo_replies(photo_replies: list[dict]) -> bool:
+    """إرفاق صور الردود بالمقالات المنشورة دون إعادة نشرها.
+
+    يرجع True عند فشل مؤقت يستوجب إبقاء مؤشر Telegram لإعادة المحاولة.
+    """
+    retry_required = False
+    for reply in photo_replies:
+        source_url = reply.get("link")
+        try:
+            published_post = get_published_post_by_source_url(source_url)
+        except Exception as error:
+            log.error(
+                "❌ تعذّر العثور على خبر Telegram لربط صورة الرد (%s)؛ ستعاد المحاولة.",
+                type(error).__name__,
+            )
+            retry_required = True
+            continue
+
+        if not published_post:
+            log.info(
+                "ℹ️ صورة رد Telegram للمنشور %s لم تُرفق لأن الخبر الأصلي غير منشور في الموقع.",
+                reply.get("_telegram_reply_to_message_id"),
+            )
+            continue
+
+        try:
+            source_image = download_telegram_photo(reply["_telegram_photo_file_id"])
+        except TelegramFileTooLargeError as error:
+            log.warning("⚠️ صورة رد Telegram أكبر من حد التنزيل؛ لن تُرفق: %s", error)
+            continue
+        except Exception as error:
+            log.error(
+                "❌ تعذّر تنزيل صورة رد Telegram؛ ستعاد المحاولة (%s).",
+                type(error).__name__,
+            )
+            retry_required = True
+            continue
+
+        try:
+            image_url, _ = get_post_image_urls(
+                None,
+                headline_text=published_post.get("title"),
+                source_image_bytes=source_image,
+            )
+        except Exception as error:
+            log.error(
+                "❌ تعذّرت معالجة صورة رد Telegram؛ ستعاد المحاولة (%s).",
+                type(error).__name__,
+            )
+            retry_required = True
+            continue
+        if not image_url:
+            log.warning("⚠️ لم تنتج معالجة صورة رد Telegram غلافًا؛ سيبقى الخبر بلا تغيير.")
+            continue
+
+        try:
+            updated = update_published_post_cover_image(published_post["id"], image_url)
+        except Exception as error:
+            log.error(
+                "❌ تعذّر تحديث صورة الخبر المنشور من رد Telegram؛ ستعاد المحاولة (%s).",
+                type(error).__name__,
+            )
+            retry_required = True
+            continue
+        if not updated:
+            log.error("❌ لم يُؤكَّد تحديث غلاف خبر Telegram؛ ستعاد المحاولة.")
+            retry_required = True
+            continue
+        log.info(
+            "✅ أُلحقت صورة رد Telegram بالخبر المنشور «%s».",
+            published_post.get("title", "")[:70],
+        )
+    return retry_required
 
 # فيد الرياضة (سكاي نيوز عربية) — مضاف مباشرة هنا لأنه غير معرّف
 # في hasad_news_bot_fixed
@@ -271,13 +349,26 @@ def run():
 
     telegram_cursor = None
     telegram_source_error = None
+    telegram_retry_required = False
     try:
         telegram_items, telegram_cursor = fetch_telegram_items()
+        telegram_items, photo_replies = merge_photo_replies_with_news_items(
+            telegram_items,
+            existing_source_urls=existing_urls | blocked_links,
+        )
+        if photo_replies:
+            telegram_retry_required = _process_late_telegram_photo_replies(photo_replies)
         log.info(f"📨 منشورات تيليجرام الجديدة من قناة حصاد: {len(telegram_items)}")
     except Exception as exc:
         telegram_items = []
         telegram_source_error = exc
         log.error(f"❌ تعذّر جلب منشورات قناة Telegram المصدر: {exc}")
+
+    def finalize_telegram_poll(retry_required: bool = False) -> None:
+        if telegram_cursor is not None and not (retry_required or telegram_retry_required):
+            commit_telegram_cursor(telegram_cursor)
+        if telegram_source_error:
+            raise RuntimeError("Telegram source polling failed; see the logged error above.") from telegram_source_error
 
     items = collect_recent_items(SELECTED_FEEDS)
     items.extend(telegram_items)
@@ -317,10 +408,7 @@ def run():
 
     if not new_items:
         log.info("لا يوجد أخبار جديدة حالياً.")
-        if telegram_cursor is not None:
-            commit_telegram_cursor(telegram_cursor)
-        if telegram_source_error:
-            raise RuntimeError("Telegram source polling failed; see the logged error above.") from telegram_source_error
+        finalize_telegram_poll()
         return
 
     apply_full_extraction(new_items)
@@ -328,10 +416,7 @@ def run():
 
     if not new_items:
         log.info("لا يوجد أخبار جديدة حالياً بعد الاستبعاد.")
-        if telegram_cursor is not None:
-            commit_telegram_cursor(telegram_cursor)
-        if telegram_source_error:
-            raise RuntimeError("Telegram source polling failed; see the logged error above.") from telegram_source_error
+        finalize_telegram_poll()
         return
 
     ok = fail = skipped = 0
@@ -343,6 +428,8 @@ def run():
         log.info(f"✍️  إعادة صياغة: {it['title'][:60]}")
         rewritten = rewrite_article_with_scope(it["title"], it["raw_body"], base_category)
         if not rewritten:
+            if it.get("_telegram_source"):
+                telegram_retry_required = True
             skipped += 1
             continue
         final_title = rewritten["title"].strip()
@@ -458,10 +545,7 @@ def run():
     log.info("═" * 60)
     log.info(f"📊 نُشر: {ok} / فشل: {fail} / تُخُطّي: {skipped}")
     log.info("═" * 60)
-    if telegram_cursor is not None and fail == 0:
-        commit_telegram_cursor(telegram_cursor)
-    if telegram_source_error:
-        raise RuntimeError("Telegram source polling failed; see the logged error above.") from telegram_source_error
+    finalize_telegram_poll(retry_required=fail > 0)
 
 
 def _acquire_lock_or_exit():

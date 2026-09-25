@@ -2250,6 +2250,62 @@ def sb_insert(record: dict) -> Optional[str]:
     return None
 
 
+def get_published_post_by_source_url(source_url: str) -> Optional[dict]:
+    """يبحث عن مقال منشور مطابق لرابط المصدر لربط صورة رد Telegram به."""
+    url = f"{SUPABASE_URL}/rest/v1/{TABLE_NAME}"
+    params = {
+        "select": "id,title,status,featured_image",
+        "source_url": f"eq.{source_url}",
+        "status": "eq.published",
+        "limit": "1",
+    }
+    response = requests.get(url, headers=sb_headers(), params=params, timeout=REQUEST_TIMEOUT)
+    if response.status_code != 200:
+        log.error(
+            "❌ تعذّر البحث عن مقال Telegram المنشور [%s]: %s",
+            response.status_code,
+            response.text[:200],
+        )
+        response.raise_for_status()
+    rows = response.json()
+    return rows[0] if rows else None
+
+
+def update_published_post_cover_image(post_id: str, image_url: str) -> bool:
+    """يحدّث صورة غلاف المقال المنشور فقط بعد وصول صورة رد Telegram."""
+    url = f"{SUPABASE_URL}/rest/v1/{TABLE_NAME}"
+    params = {"id": f"eq.{post_id}", "select": "id"}
+    payload = {
+        "featured_image": image_url,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        response = requests.patch(
+            url,
+            headers={**sb_headers(), "Prefer": "return=representation"},
+            params=params,
+            json=payload,
+            timeout=REQUEST_TIMEOUT,
+        )
+    except requests.RequestException as error:
+        log.error("❌ تعذّر تحديث صورة غلاف مقال Telegram (%s).", type(error).__name__)
+        raise
+    if response.status_code not in (200, 204):
+        log.error(
+            "❌ فشل تحديث صورة غلاف مقال Telegram [%s]: %s",
+            response.status_code,
+            response.text[:200],
+        )
+        return False
+    if response.status_code == 204:
+        return True
+    try:
+        rows = response.json()
+    except ValueError:
+        rows = []
+    return any(str(row.get("id")) == str(post_id) for row in rows or [])
+
+
 _AUTHOR_ID_CACHE: dict[str, str] = {}
 
 
