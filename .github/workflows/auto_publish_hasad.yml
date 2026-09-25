@@ -43,6 +43,14 @@ jobs:
           restore-keys: |
             hasad-data-
 
+      - name: إخفاء معرّف قناة المصدر من السجلات
+        env:
+          TELEGRAM_SOURCE_CHAT_ID: ${{ vars.TELEGRAM_SOURCE_CHAT_ID || secrets.TELEGRAM_SOURCE_CHAT_ID }}
+        run: |
+          if [ -n "$TELEGRAM_SOURCE_CHAT_ID" ]; then
+            echo "::add-mask::$TELEGRAM_SOURCE_CHAT_ID"
+          fi
+
       - name: تشغيل بوت النشر
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
