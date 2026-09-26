@@ -14,6 +14,32 @@ CHANNEL_ID = "-1009876543210"
 
 
 class TelegramSourceItemTests(unittest.TestCase):
+    def test_extracts_same_video_hosts_and_direct_video_files_as_shmsan(self):
+        cases = {
+            "https://youtu.be/abc123": "https://youtu.be/abc123",
+            "https://instagram.com/reel/example/": "https://instagram.com/reel/example/",
+            "https://www.dailymotion.com/video/x123": "https://www.dailymotion.com/video/x123",
+            "https://streamable.com/clip": "https://streamable.com/clip",
+            "https://cdn.example/video.mp4?token=abc": "https://cdn.example/video.mp4?token=abc",
+            "https://example.com/photo.jpg": None,
+        }
+        for text, expected in cases.items():
+            with self.subTest(text=text):
+                self.assertEqual(source.extract_video_url(text), expected)
+
+    def test_video_url_is_carried_to_normal_telegram_item(self):
+        update = {
+            "update_id": 9011,
+            "channel_post": {
+                "message_id": 51,
+                "date": 1790360000,
+                "chat": {"id": int(CHANNEL_ID)},
+                "text": "عنوان الخبر\nتفاصيل الخبر\nhttps://x.com/source/status/12345",
+            },
+        }
+        item = source._to_news_item(update, CHANNEL_ID)
+        self.assertEqual(item["_telegram_video_url"], "https://x.com/source/status/12345")
+
     def test_text_post_becomes_raw_news_item(self):
         update = {
             "update_id": 9001,
@@ -113,6 +139,40 @@ class TelegramSourceItemTests(unittest.TestCase):
         self.assertEqual(late, [])
         self.assertEqual(news[0]["_telegram_photo_file_id"], "reply-photo")
         self.assertEqual(news[0]["_telegram_update_id"], 9007)
+
+    def test_same_batch_video_only_reply_is_merged_into_original_news_item(self):
+        original = source._to_news_item({"update_id": 9012, "channel_post": {
+            "message_id": 52, "date": 1790360000, "chat": {"id": int(CHANNEL_ID)},
+            "text": "عنوان خبر الفيديو\nمتن الخبر.",
+        }}, CHANNEL_ID)
+        reply = source._to_news_item({"update_id": 9013, "channel_post": {
+            "message_id": 53, "date": 1790360100, "chat": {"id": int(CHANNEL_ID)},
+            "text": "https://youtu.be/video123",
+            "reply_to_message": {"message_id": 52, "date": 1790360000,
+                "chat": {"id": int(CHANNEL_ID)}, "text": "عنوان خبر الفيديو\nمتن الخبر."},
+        }}, CHANNEL_ID)
+        news, late = source.merge_photo_replies_with_news_items([original, reply])
+        self.assertEqual(len(news), 1)
+        self.assertEqual(late, [])
+        self.assertEqual(news[0]["link"], f"https://t.me/c/{CHANNEL_ID[4:]}/52")
+        self.assertEqual(news[0]["_telegram_video_url"], "https://youtu.be/video123")
+
+    def test_late_video_only_reply_routes_to_late_attachment_handling(self):
+        original = source._to_news_item({"update_id": 9014, "channel_post": {
+            "message_id": 54, "date": 1790360000, "chat": {"id": int(CHANNEL_ID)},
+            "text": "خبر منشور سابقًا",
+        }}, CHANNEL_ID)
+        reply = source._to_news_item({"update_id": 9015, "channel_post": {
+            "message_id": 55, "date": 1790360100, "chat": {"id": int(CHANNEL_ID)},
+            "text": "https://youtu.be/video123",
+            "reply_to_message": {"message_id": 54, "date": 1790360000,
+                "chat": {"id": int(CHANNEL_ID)}, "text": "خبر منشور سابقًا"},
+        }}, CHANNEL_ID)
+        news, late = source.merge_photo_replies_with_news_items(
+            [original, reply], existing_source_urls={original["link"]}
+        )
+        self.assertEqual(news, [original])
+        self.assertEqual(late, [reply])
 
     def test_already_published_story_routes_reply_to_late_path(self):
         original = source._to_news_item(

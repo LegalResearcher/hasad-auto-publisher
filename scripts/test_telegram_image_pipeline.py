@@ -76,6 +76,33 @@ class TelegramImagePipelineTests(unittest.TestCase):
 
         self.assertTrue(retry_required)
 
+    def test_late_video_reply_updates_published_video_field(self):
+        reply = {
+            "link": "https://t.me/c/1234567890/42",
+            "_telegram_video_url": "https://youtu.be/video123",
+        }
+        with (
+            mock.patch.object(auto_publisher, "get_published_post_by_source_url", return_value={"id": "post-uuid", "title": "عنوان الخبر"}),
+            mock.patch.object(auto_publisher, "update_published_post_video_url", return_value=True) as update_video,
+        ):
+            retry_required = auto_publisher._process_late_telegram_photo_replies([reply])
+
+        self.assertFalse(retry_required)
+        update_video.assert_called_once_with("post-uuid", "https://youtu.be/video123")
+
+    def test_late_video_update_failure_preserves_retry(self):
+        reply = {
+            "link": "https://t.me/c/1234567890/42",
+            "_telegram_video_url": "https://youtu.be/video123",
+        }
+        with (
+            mock.patch.object(auto_publisher, "get_published_post_by_source_url", return_value={"id": "post-uuid", "title": "عنوان الخبر"}),
+            mock.patch.object(auto_publisher, "update_published_post_video_url", return_value=False),
+        ):
+            retry_required = auto_publisher._process_late_telegram_photo_replies([reply])
+
+        self.assertTrue(retry_required)
+
 
 if __name__ == "__main__":
     unittest.main()

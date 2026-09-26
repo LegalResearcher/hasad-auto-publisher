@@ -1,5 +1,6 @@
 import fcntl
 import os
+import re
 import sys
 from typing import Optional
 
@@ -88,6 +89,7 @@ from hasad_news_bot_fixed import (
     apply_headline_design_to_image,
     HEADLINE_DESIGN_ENABLED,
     update_published_post_cover_image,
+    update_published_post_video_url,
 )
 import json
 from telegram_source import (
@@ -95,6 +97,7 @@ from telegram_source import (
     commit_telegram_cursor,
     download_telegram_photo,
     fetch_telegram_items,
+    is_configured as is_telegram_source_configured,
     merge_photo_replies_with_news_items,
 )
 
@@ -131,7 +134,7 @@ WORLD_CATEGORY = "أخبار العالم"
 
 
 def _process_late_telegram_photo_replies(photo_replies: list[dict]) -> bool:
-    """إرفاق صور الردود بالمقالات المنشورة دون إعادة نشرها.
+    """إرفاق صور/روابط فيديو الردود بالمقالات المنشورة دون إعادة نشرها.
 
     يرجع True عند فشل مؤقت يستوجب إبقاء مؤشر Telegram لإعادة المحاولة.
     """
@@ -142,7 +145,7 @@ def _process_late_telegram_photo_replies(photo_replies: list[dict]) -> bool:
             published_post = get_published_post_by_source_url(source_url)
         except Exception as error:
             log.error(
-                "❌ تعذّر العثور على خبر Telegram لربط صورة الرد (%s)؛ ستعاد المحاولة.",
+                "❌ تعذّر العثور على خبر Telegram لربط مرفق الرد (%s)؛ ستعاد المحاولة.",
                 type(error).__name__,
             )
             retry_required = True
@@ -150,9 +153,31 @@ def _process_late_telegram_photo_replies(photo_replies: list[dict]) -> bool:
 
         if not published_post:
             log.info(
-                "ℹ️ صورة رد Telegram للمنشور %s لم تُرفق لأن الخبر الأصلي غير منشور في الموقع.",
+                "ℹ️ مرفق رد Telegram للمنشور %s ينتظر نشر الخبر الأصلي؛ ستعاد المحاولة.",
                 reply.get("_telegram_reply_to_message_id"),
             )
+            retry_required = True
+            continue
+
+        video_url = reply.get("_telegram_video_url")
+        if video_url:
+            try:
+                if not update_published_post_video_url(published_post["id"], video_url):
+                    retry_required = True
+                    continue
+                log.info(
+                    "✅ حُدّث رابط فيديو الخبر المنشور «%s».",
+                    published_post.get("title", "")[:70],
+                )
+            except Exception as error:
+                log.error(
+                    "❌ تعذّر تحديث رابط فيديو Telegram؛ ستعاد المحاولة (%s).",
+                    type(error).__name__,
+                )
+                retry_required = True
+                continue
+
+        if not reply.get("_telegram_photo_file_id"):
             continue
 
         try:
@@ -259,11 +284,20 @@ SCOPE_INSTRUCTIONS_SUFFIX = """
 """
 
 
-def rewrite_article_with_scope(title: str, body: str, category: str = "") -> Optional[dict]:
+def rewrite_article_with_scope(
+    title: str,
+    body: str,
+    category: str = "",
+    video_url: Optional[str] = None,
+) -> Optional[dict]:
     """يستخدم برومبت hasad_news_bot_fixed.build_prompt كما هو دون أي تعديل
     أو حذف، ويضيف إليه فقط تعليمة تصنيف الخبر (دولي/يمني) في نهايته."""
     base_prompt = build_prompt(title, body, category)
-    prompt = base_prompt + SCOPE_INSTRUCTIONS_SUFFIX
+    video_instruction = (
+        f"\n\nرابط الفيديو محفوظ في حقل خارجي؛ لا تذكره أو تنسخه داخل title أو excerpt أو content: {video_url}"
+        if video_url else ""
+    )
+    prompt = base_prompt + SCOPE_INSTRUCTIONS_SUFFIX + video_instruction
     for attempt in range(1, 3):
         raw = call_with_rotation(prompt, schema=EXTENDED_RESPONSE_SCHEMA)
         try:
@@ -272,6 +306,10 @@ def rewrite_article_with_scope(title: str, body: str, category: str = "") -> Opt
                 if attempt < 2:
                     continue
                 return None
+            if video_url:
+                video_pattern = re.escape(video_url.rstrip(".,؛،"))
+                for field in ("title", "excerpt", "content"):
+                    data[field] = re.sub(video_pattern, "", data[field], flags=re.IGNORECASE)
             return data
         except Exception as e:
             if attempt < 2:
@@ -351,13 +389,16 @@ def run():
     telegram_source_error = None
     telegram_retry_required = False
     try:
-        telegram_items, telegram_cursor = fetch_telegram_items()
-        telegram_items, photo_replies = merge_photo_replies_with_news_items(
-            telegram_items,
-            existing_source_urls=existing_urls | blocked_links,
-        )
-        if photo_replies:
-            telegram_retry_required = _process_late_telegram_photo_replies(photo_replies)
+        if is_telegram_source_configured():
+            telegram_items, telegram_cursor = fetch_telegram_items()
+            telegram_items, photo_replies = merge_photo_replies_with_news_items(
+                telegram_items,
+                existing_source_urls=existing_urls | blocked_links,
+            )
+            if photo_replies:
+                telegram_retry_required = _process_late_telegram_photo_replies(photo_replies)
+        else:
+            telegram_items = []
         log.info(f"📨 منشورات تيليجرام الجديدة من قناة حصاد: {len(telegram_items)}")
     except Exception as exc:
         telegram_items = []
@@ -426,7 +467,12 @@ def run():
         is_opinion = base_category in NO_REWRITE_CATEGORIES
 
         log.info(f"✍️  إعادة صياغة: {it['title'][:60]}")
-        rewritten = rewrite_article_with_scope(it["title"], it["raw_body"], base_category)
+        rewritten = rewrite_article_with_scope(
+            it["title"],
+            it["raw_body"],
+            base_category,
+            video_url=it.get("_telegram_video_url") if it.get("_telegram_source") else None,
+        )
         if not rewritten:
             if it.get("_telegram_source"):
                 telegram_retry_required = True
@@ -502,6 +548,7 @@ def run():
             "published_at": item_date,
             "featured_image": image_url,
             "thumbnail_image": thumbnail_url,
+            "external_video_url": it.get("_telegram_video_url"),
             "is_featured": post_category in FEATURED_SLIDER_CATEGORIES,
         }
 
