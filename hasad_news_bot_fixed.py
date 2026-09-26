@@ -891,12 +891,41 @@ def _normalize_title_for_dedup(title: str) -> str:
     return t
 
 
+def _handle_duplicate_telegram_media(
+    item: dict,
+    match_index: int,
+    history_count: int,
+    kept: list[dict],
+    kept_titles: list[str],
+    duplicates_out: Optional[list[dict]],
+) -> None:
+    """Keep Telegram media when dedup removes the duplicate story itself."""
+    media_keys = ("_telegram_photo_file_id", "_telegram_video_url")
+    if match_index < history_count:
+        if duplicates_out is not None and any(item.get(key) for key in media_keys):
+            item["_duplicate_match_title"] = kept_titles[match_index]
+            duplicates_out.append(item)
+        return
+
+    target = kept[match_index - history_count]
+    target["_telegram_media_source"] = True
+    for key in media_keys:
+        if item.get(key):
+            target[key] = item[key]
+    if item.get("_telegram_update_id"):
+        target["_telegram_update_id"] = max(
+            int(target.get("_telegram_update_id") or 0),
+            int(item["_telegram_update_id"]),
+        )
+
+
 def remove_duplicate_news(
     items: list[dict],
     threshold: float = DUPLICATE_TITLE_THRESHOLD,
     embedding_threshold: float = DUPLICATE_EMBEDDING_THRESHOLD,
     time_window_minutes: int = DUPLICATE_TIME_WINDOW_MINUTES,
     history_items: Optional[list[dict]] = None,
+    duplicates_out: Optional[list[dict]] = None,
 ) -> list[dict]:
     """يستبعد الأخبار المكررة (نفس الحدث من أكثر من مصدر) بشرطين معاً:
     تشابه دلالي مرتفع جداً بين متجهي العنوانين (Gemini embedding) + تقارب
@@ -913,9 +942,12 @@ def remove_duplicate_news(
 
     history_items: أخبار منشورة فعلاً بقاعدة البيانات (من تشغيلات سابقة،
     محتملة من فيد مختلف) تُستخدم كمرجع مقارنة فقط ولا تُعاد بالنتيجة.
-    كل عنصر منها يمكن أن يحمل "embedding" (متجه) بجانب "title" و"pub_date"."""
+    كل عنصر منها يمكن أن يحمل "embedding" (متجه) بجانب "title" و"pub_date".
+    duplicates_out: يستعيد عناصر Telegram ذات الوسائط عند تطابقها مع تاريخ
+    منشور، كي تُرفق الوسائط بالمقال الموجود بدلاً من إسقاطها."""
     kept: list[dict] = []
     kept_norm_titles: list[str] = []
+    kept_titles: list[str] = []
     kept_pub_dates: list[Optional[datetime]] = []
     kept_embeddings: list[Optional[list[float]]] = []
     time_window = timedelta(minutes=time_window_minutes)
@@ -925,6 +957,7 @@ def remove_duplicate_news(
         pub_date = h.get("pub_date")
         if norm and pub_date is not None:
             kept_norm_titles.append(norm)
+            kept_titles.append(h.get("title", ""))
             kept_pub_dates.append(pub_date)
             kept_embeddings.append(h.get("embedding"))
 
@@ -956,6 +989,9 @@ def remove_duplicate_news(
                     method_label = "نصي احتياطي"
                 if is_match:
                     is_dup = True
+                    _handle_duplicate_telegram_media(
+                        it, i, history_count, kept, kept_titles, duplicates_out
+                    )
                     source = "منشور سابقاً" if i < history_count else "بنفس الدفعة"
                     log.info(
                         f"  🔁 خبر مكرر تم استبعاده (تشابه {method_label} {sim:.0%} + تقارب زمني، {source}): "
@@ -966,6 +1002,7 @@ def remove_duplicate_news(
             continue
         kept.append(it)
         kept_norm_titles.append(norm)
+        kept_titles.append(it.get("title", ""))
         kept_pub_dates.append(pub_date)
         kept_embeddings.append(emb)
 
@@ -1118,6 +1155,7 @@ def remove_raw_duplicate_news(
     threshold: float = RAW_DUPLICATE_THRESHOLD,
     time_window_minutes: int = RAW_CONTENT_MAX_AGE_HOURS * 60,
     history_items: Optional[list[dict]] = None,
+    duplicates_out: Optional[list[dict]] = None,
 ) -> list[dict]:
     """طبقة أولى (سريعة، رخيصة، بدون أي استدعاء لـGemini): تستبعد الأخبار
     التي متنها الخام (عنوان + raw_body كما وصل من الفيد) شبه مطابق نصياً
@@ -1134,6 +1172,7 @@ def remove_raw_duplicate_news(
     أبطأ فقط مع الأرشيفات الكبيرة جداً."""
     kept: list[dict] = []
     kept_norms: list[str] = []
+    kept_titles: list[str] = []
     kept_pub_dates: list[Optional[datetime]] = []
     time_window = timedelta(minutes=time_window_minutes)
 
@@ -1142,6 +1181,7 @@ def remove_raw_duplicate_news(
         pub_date = h.get("pub_date")
         if norm and pub_date is not None:
             kept_norms.append(norm)
+            kept_titles.append(h.get("title", ""))
             kept_pub_dates.append(pub_date)
 
     history_count = len(kept_norms)
@@ -1198,6 +1238,10 @@ def remove_raw_duplicate_news(
                         break
 
         if is_dup:
+            match_index = idx if use_lsh else i
+            _handle_duplicate_telegram_media(
+                it, match_index, history_count, kept, kept_titles, duplicates_out
+            )
             log.info(
                 f"  🔁🥇 خبر مكرر (تطابق نصي خام {matched_sim:.0%}، {matched_source}) "
                 f"تم استبعاده قبل إرساله لـGemini: {it.get('title', '')[:70]}"
@@ -1206,6 +1250,7 @@ def remove_raw_duplicate_news(
 
         kept.append(it)
         kept_norms.append(norm)
+        kept_titles.append(it.get("title", ""))
         kept_pub_dates.append(pub_date)
         if use_lsh and norm:
             mh = _build_minhash(norm)
@@ -1289,6 +1334,7 @@ def remove_content_duplicate_news(
     embedding_threshold: float = CONTENT_DUPLICATE_EMBEDDING_THRESHOLD,
     time_window_minutes: int = CONTENT_DUPLICATE_TIME_WINDOW_MINUTES,
     history_items: Optional[list[dict]] = None,
+    duplicates_out: Optional[list[dict]] = None,
 ) -> list[dict]:
     """طبقة ثالثة (بعد raw-text وbعد عنوان دلالي): تستبعد خبراً لو تحققت
     **كل** الشروط الثلاثة معاً مقارنة بخبر آخر (بنفس الدفعة أو من السجل
@@ -1300,6 +1346,7 @@ def remove_content_duplicate_news(
     اشتراط الكيان المشترك تحديداً هو ما يسمح باستخدام عتبة أخف من طبقة
     العنوان (0.80 بدل 0.93) دون رفع خطر حذف خبرين مختلفين فعلياً بالخطأ."""
     kept: list[dict] = []
+    kept_titles: list[str] = []
     kept_embeddings: list[Optional[list[float]]] = []
     kept_entities: list[set] = []
     kept_pub_dates: list[Optional[datetime]] = []
@@ -1313,6 +1360,7 @@ def remove_content_duplicate_news(
             kept_embeddings.append(emb)
             kept_entities.append(entities)
             kept_pub_dates.append(pub_date)
+            kept_titles.append(h.get("title", ""))
 
     history_count = len(kept_pub_dates)
 
@@ -1343,6 +1391,9 @@ def remove_content_duplicate_news(
                 sim = _cosine_similarity(emb, existing_emb)
                 if sim >= embedding_threshold:
                     is_dup = True
+                    _handle_duplicate_telegram_media(
+                        it, i, history_count, kept, kept_titles, duplicates_out
+                    )
                     source = "منشور سابقاً" if i < history_count else "بنفس الدفعة"
                     log.info(
                         f"  🔁🥉 خبر مكرر (تشابه محتوى {sim:.0%} + كيان مشترك "
@@ -1353,6 +1404,7 @@ def remove_content_duplicate_news(
         if is_dup:
             continue
         kept.append(it)
+        kept_titles.append(title)
         kept_embeddings.append(emb)
         kept_entities.append(entities)
         kept_pub_dates.append(pub_date)
@@ -2254,7 +2306,7 @@ def get_published_post_by_source_url(source_url: str) -> Optional[dict]:
     """يبحث عن مقال منشور مطابق لرابط المصدر لربط صورة رد Telegram به."""
     url = f"{SUPABASE_URL}/rest/v1/{TABLE_NAME}"
     params = {
-        "select": "id,title,status,featured_image",
+        "select": "id,title,status,featured_image,external_video_url",
         "source_url": f"eq.{source_url}",
         "status": "eq.published",
         "limit": "1",
@@ -2269,6 +2321,50 @@ def get_published_post_by_source_url(source_url: str) -> Optional[dict]:
         response.raise_for_status()
     rows = response.json()
     return rows[0] if rows else None
+
+
+def get_published_post_by_title(title: str) -> Optional[dict]:
+    """يعثر على المقال المنشور المطابق لعنوان مرجع كشف التكرار.
+
+    يفضل التطابق الحرفي. عند ورود العنوان من سجل المتن الخام، قد يكون
+    عنوان المصدر مختلفاً عن عنوان الموقع المحرر؛ لذلك يسمح باحتياط نصي
+    محافظ بين المقالات الحديثة فقط.
+    """
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
+    url = f"{SUPABASE_URL}/rest/v1/{TABLE_NAME}"
+    params = {
+        "select": "id,title,status,featured_image,external_video_url,created_at",
+        "created_at": f"gte.{cutoff}",
+        "status": "eq.published",
+        "order": "created_at.desc",
+        "limit": "500",
+    }
+    response = requests.get(url, headers=sb_headers(), params=params, timeout=REQUEST_TIMEOUT)
+    if response.status_code != 200:
+        log.error(
+            "❌ تعذّر فحص العناوين الحديثة للمطابقة الاحتياطية [%s]: %s",
+            response.status_code,
+            response.text[:200],
+        )
+        response.raise_for_status()
+    norm_title = _normalize_title_for_dedup(title)
+    best_post = None
+    best_similarity = 0.0
+    for row in response.json():
+        row_title = _normalize_title_for_dedup(row.get("title", ""))
+        if row_title == norm_title:
+            return row
+        similarity = _text_similarity(norm_title, row_title)
+        if similarity > best_similarity:
+            best_similarity = similarity
+            best_post = row
+    if best_similarity >= 0.75:
+        log.info(
+            "  ↳ رُبط مرفق Telegram بأقرب مقال حديث (تشابه عنوان احتياطي %.0f%%).",
+            best_similarity * 100,
+        )
+        return best_post
+    return None
 
 
 def update_published_post_cover_image(post_id: str, image_url: str) -> bool:

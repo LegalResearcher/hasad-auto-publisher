@@ -29,9 +29,13 @@ _VIDEO_HOST_RE = re.compile(
 _VIDEO_EXT_RE = re.compile(r"\.(?:mp4|webm|mov|m3u8)(?:$|[?#])", re.IGNORECASE)
 
 
-def extract_video_url(text: str) -> str | None:
-    """Extract the first well-known video-host or direct-video URL."""
-    for candidate in _URL_RE.findall(text or ""):
+def extract_video_url(text: str, entities: list[dict[str, Any]] | None = None) -> str | None:
+    """Extract visible video URLs and Telegram's hidden text_link URLs."""
+    candidates = list(_URL_RE.findall(text or ""))
+    for entity in entities or []:
+        if entity.get("type") == "text_link" and entity.get("url"):
+            candidates.append(str(entity["url"]))
+    for candidate in candidates:
         candidate = candidate.rstrip(".,؛،")
         if _VIDEO_HOST_RE.search(candidate) or _VIDEO_EXT_RE.search(candidate):
             return candidate
@@ -126,9 +130,10 @@ def _post_link(chat: dict[str, Any], message_id: int) -> str:
 
 
 def _to_news_item(update: dict[str, Any], expected_chat_id: str) -> dict[str, Any] | None:
-    post = update.get("channel_post")
+    post = update.get("channel_post") or update.get("edited_channel_post")
     if not isinstance(post, dict):
         return None
+    is_edited_post = isinstance(update.get("edited_channel_post"), dict)
     chat = post.get("chat") or {}
     if str(chat.get("id", "")) != expected_chat_id:
         return None
@@ -143,13 +148,27 @@ def _to_news_item(update: dict[str, Any], expected_chat_id: str) -> dict[str, An
         ),
         default=None,
     )
+    document = post.get("document") or {}
+    document_is_image = str(document.get("mime_type") or "").lower().startswith("image/")
+    if not document_is_image and not document.get("mime_type"):
+        document_is_image = bool(re.search(
+            r"\.(?:jpe?g|png|webp|gif|bmp|tiff?)$",
+            str(document.get("file_name") or ""),
+            re.IGNORECASE,
+        ))
+    image_file_id = (largest_photo or {}).get("file_id") or (
+        document.get("file_id") if document_is_image else None
+    )
     reply_to = post.get("reply_to_message") or {}
     reply_to_message_id = reply_to.get("message_id")
-    video_url = extract_video_url(raw_text)
-    is_attachment_reply = bool(reply_to_message_id and (largest_photo or video_url))
+    entities = (post.get("entities") or []) + (post.get("caption_entities") or [])
+    video_url = extract_video_url(raw_text, entities)
+    has_media = bool(image_file_id or video_url)
+    is_attachment_reply = bool(reply_to_message_id and has_media)
+    is_media_edit = bool(is_edited_post and has_media)
     original_text = (reply_to.get("text") or reply_to.get("caption") or "").strip()
     article_text = original_text if is_attachment_reply and original_text else raw_text
-    if not article_text and not is_attachment_reply:
+    if not article_text and not (is_attachment_reply or is_media_edit):
         return None
 
     message_id = int(post["message_id"])
@@ -163,7 +182,7 @@ def _to_news_item(update: dict[str, Any], expected_chat_id: str) -> dict[str, An
     # A photo/video reply is an attachment to the original channel post, not a
     # new article. Return the original post URL so the publisher can merge it
     # in-batch or update its already-published article if it arrives later.
-    if is_attachment_reply:
+    if is_attachment_reply or is_media_edit:
         lines = [line.strip() for line in article_text.splitlines() if line.strip()]
         title = lines[0] if lines else article_text
         return {
@@ -176,12 +195,13 @@ def _to_news_item(update: dict[str, Any], expected_chat_id: str) -> dict[str, An
             "category": "أخبار وتقارير",
             "author": None,
             "_telegram_source": True,
-            "_telegram_photo_reply": bool(largest_photo),
-            "_telegram_video_reply": bool(video_url),
+            "_telegram_photo_reply": bool(image_file_id) and is_attachment_reply,
+            "_telegram_video_reply": bool(video_url) and is_attachment_reply,
+            "_telegram_media_edit": is_media_edit,
             "_telegram_reply_message_id": message_id,
-            "_telegram_reply_to_message_id": int(reply_to_message_id),
+            "_telegram_reply_to_message_id": int(reply_to_message_id) if reply_to_message_id is not None else None,
             "_telegram_update_id": update_id,
-            "_telegram_photo_file_id": (largest_photo or {}).get("file_id"),
+            "_telegram_photo_file_id": image_file_id,
             "_telegram_video_url": video_url,
         }
 
@@ -200,7 +220,7 @@ def _to_news_item(update: dict[str, Any], expected_chat_id: str) -> dict[str, An
         "author": None,
         "_telegram_source": True,
         "_telegram_update_id": update_id,
-        "_telegram_photo_file_id": (largest_photo or {}).get("file_id"),
+        "_telegram_photo_file_id": image_file_id,
         "_telegram_video_url": video_url,
     }
 
@@ -215,32 +235,50 @@ def merge_photo_replies_with_news_items(
     news item in this getUpdates batch and must be matched to an already
     published post by the caller.
     """
-    news_items = [
-        item for item in items
-        if not item.get("_telegram_photo_reply") and not item.get("_telegram_video_reply")
-    ]
+    def has_reply_media(item: dict[str, Any]) -> bool:
+        return bool(item.get("_telegram_photo_reply") or item.get("_telegram_video_reply"))
+
+    def has_edit_media(item: dict[str, Any]) -> bool:
+        return bool(item.get("_telegram_media_edit"))
+
+    news_items = [item for item in items if not has_reply_media(item) and not has_edit_media(item)]
     news_by_link = {item.get("link"): item for item in news_items}
     late_replies = []
     existing_source_urls = existing_source_urls or set()
-    for reply in (
-        item for item in items
-        if item.get("_telegram_photo_reply") or item.get("_telegram_video_reply")
-    ):
-        if reply.get("link") in existing_source_urls:
+    def attach_media(original: dict[str, Any], attachment: dict[str, Any]) -> None:
+        if attachment.get("_telegram_photo_file_id"):
+            original["_telegram_photo_file_id"] = attachment.get("_telegram_photo_file_id")
+        if attachment.get("_telegram_video_url"):
+            original["_telegram_video_url"] = attachment.get("_telegram_video_url")
+        original["_telegram_update_id"] = max(
+            int(original.get("_telegram_update_id") or 0),
+            int(attachment.get("_telegram_update_id") or 0),
+        )
+
+    for reply in items:
+        if not has_reply_media(reply) and not has_edit_media(reply):
+            continue
+        source_url = reply.get("link")
+        original = news_by_link.get(source_url)
+
+        if has_edit_media(reply):
+            if source_url in existing_source_urls:
+                late_replies.append(reply)
+            elif original:
+                attach_media(original, reply)
+                logger.info("Attached edited Telegram media to source post message_id=%s.", reply.get("_telegram_update_id"))
+            else:
+                news_items.append(reply)
+                news_by_link[source_url] = reply
+            continue
+
+        if source_url in existing_source_urls:
             late_replies.append(reply)
             continue
-        original = news_by_link.get(reply.get("link"))
         if not original:
             late_replies.append(reply)
             continue
-        if reply.get("_telegram_photo_file_id"):
-            original["_telegram_photo_file_id"] = reply.get("_telegram_photo_file_id")
-        if reply.get("_telegram_video_url"):
-            original["_telegram_video_url"] = reply.get("_telegram_video_url")
-        original["_telegram_update_id"] = max(
-            int(original.get("_telegram_update_id") or 0),
-            int(reply.get("_telegram_update_id") or 0),
-        )
+        attach_media(original, reply)
         logger.info(
             "Attached Telegram reply media to source post message_id=%s.",
             reply.get("_telegram_reply_to_message_id"),
@@ -388,22 +426,22 @@ def fetch_telegram_items() -> tuple[list[dict[str, Any]], int | None]:
             "offset": last_update_id + 1,
             "limit": 100,
             "timeout": 0,
-            "allowed_updates": '["channel_post"]',
+            "allowed_updates": '["channel_post","edited_channel_post"]',
         },
     )
     updates = payload.get("result") or []
     if not updates:
         logger.info(
-            "Telegram source returned no pending channel_post updates for configured channel %s.",
+            "Telegram source returned no pending channel_post/edited_channel_post updates for configured channel %s.",
             expected_chat_id,
         )
         return [], None
 
     highest_update_id = max(int(update["update_id"]) for update in updates)
     channel_posts = [
-        update["channel_post"]
+        update.get("channel_post") or update.get("edited_channel_post")
         for update in updates
-        if isinstance(update.get("channel_post"), dict)
+        if isinstance(update.get("channel_post") or update.get("edited_channel_post"), dict)
     ]
     observed_chat_counts: dict[str, int] = {}
     for post in channel_posts:
@@ -417,10 +455,16 @@ def fetch_telegram_items() -> tuple[list[dict[str, Any]], int | None]:
         bool((post.get("text") or post.get("caption") or "").strip())
         for post in matching_posts
     )
-    matching_with_photo = sum(bool(post.get("photo")) for post in matching_posts)
+    matching_with_photo = sum(
+        bool(
+            post.get("photo")
+            or str((post.get("document") or {}).get("mime_type") or "").lower().startswith("image/")
+        )
+        for post in matching_posts
+    )
     logger.info(
         "Telegram update diagnostics: updates=%s, channel_posts=%s, matching_chat=%s, "
-        "matching_with_text_or_caption=%s, matching_with_photo=%s.",
+        "matching_with_text_or_caption=%s, matching_with_photo_or_image_document=%s.",
         len(updates),
         len(channel_posts),
         len(matching_posts),
@@ -429,13 +473,13 @@ def fetch_telegram_items() -> tuple[list[dict[str, Any]], int | None]:
     )
     if channel_posts and not matching_posts:
         logger.warning(
-            "Telegram channel_post chat IDs do not match TELEGRAM_SOURCE_CHAT_ID; observed IDs: %s.",
+            "Telegram channel_post/edited_channel_post chat IDs do not match TELEGRAM_SOURCE_CHAT_ID; observed IDs: %s.",
             observed_chat_counts,
         )
     elif matching_posts and not matching_with_text:
         logger.warning(
             "Telegram updates match the configured channel but contain no text/caption; "
-            "text-only news cannot be rewritten. Matching posts with photos: %s.",
+            "text-only news cannot be rewritten. Matching posts with photos/image documents: %s.",
             matching_with_photo,
         )
     items = []

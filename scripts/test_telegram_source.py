@@ -40,6 +40,91 @@ class TelegramSourceItemTests(unittest.TestCase):
         item = source._to_news_item(update, CHANNEL_ID)
         self.assertEqual(item["_telegram_video_url"], "https://x.com/source/status/12345")
 
+    def test_extracts_hidden_video_url_from_text_link_entity(self):
+        update = {
+            "update_id": 9016,
+            "channel_post": {
+                "message_id": 57,
+                "date": 1790360000,
+                "chat": {"id": int(CHANNEL_ID)},
+                "text": "شاهدوا المشاهد هنا",
+                "entities": [{
+                    "type": "text_link",
+                    "offset": 0,
+                    "length": 16,
+                    "url": "https://x.com/source/status/98765",
+                }],
+            },
+        }
+        item = source._to_news_item(update, CHANNEL_ID)
+        self.assertEqual(item["_telegram_video_url"], "https://x.com/source/status/98765")
+
+    def test_extracts_photo_sent_as_image_document(self):
+        update = {
+            "update_id": 9017,
+            "channel_post": {
+                "message_id": 58,
+                "date": 1790360000,
+                "chat": {"id": int(CHANNEL_ID)},
+                "caption": "عنوان الصورة كملف",
+                "document": {
+                    "file_id": "image-document",
+                    "mime_type": "image/jpeg",
+                    "file_name": "news-photo.jpg",
+                },
+            },
+        }
+        item = source._to_news_item(update, CHANNEL_ID)
+        self.assertEqual(item["_telegram_photo_file_id"], "image-document")
+
+    def test_edited_post_with_media_is_marked_for_merge(self):
+        update = {
+            "update_id": 9018,
+            "edited_channel_post": {
+                "message_id": 59,
+                "date": 1790360000,
+                "chat": {"id": int(CHANNEL_ID)},
+                "text": "عنوان معدل\nنص الخبر\nhttps://x.com/source/status/12345",
+                "photo": [{"file_id": "edited-photo", "width": 1200, "height": 900}],
+            },
+        }
+        item = source._to_news_item(update, CHANNEL_ID)
+        self.assertTrue(item["_telegram_media_edit"])
+        self.assertEqual(item["_telegram_photo_file_id"], "edited-photo")
+        self.assertEqual(item["_telegram_video_url"], "https://x.com/source/status/12345")
+
+    def test_unpublished_edited_post_keeps_body_and_media_as_new_item(self):
+        edited = source._to_news_item({
+            "update_id": 9019,
+            "edited_channel_post": {
+                "message_id": 60,
+                "date": 1790360000,
+                "chat": {"id": int(CHANNEL_ID)},
+                "text": "عنوان معدل\nنص الخبر",
+                "photo": [{"file_id": "edited-photo", "width": 1200, "height": 900}],
+            },
+        }, CHANNEL_ID)
+        news, late = source.merge_photo_replies_with_news_items([edited])
+        self.assertEqual(news, [edited])
+        self.assertEqual(late, [])
+
+    def test_published_edited_post_routes_to_late_media_update(self):
+        edited = source._to_news_item({
+            "update_id": 9020,
+            "edited_channel_post": {
+                "message_id": 61,
+                "date": 1790360000,
+                "chat": {"id": int(CHANNEL_ID)},
+                "text": "عنوان معدل\nنص الخبر",
+                "photo": [{"file_id": "edited-photo", "width": 1200, "height": 900}],
+            },
+        }, CHANNEL_ID)
+        news, late = source.merge_photo_replies_with_news_items(
+            [edited], existing_source_urls={edited["link"]}
+        )
+        self.assertEqual(news, [])
+        self.assertEqual(late, [edited])
+
     def test_text_post_becomes_raw_news_item(self):
         update = {
             "update_id": 9001,
@@ -270,6 +355,10 @@ class TelegramPollingTests(unittest.TestCase):
         verify_channel.assert_called_once_with("test-source-token", CHANNEL_ID)
         self.assertEqual(api_call.call_args.args[1], "getUpdates")
         self.assertEqual(api_call.call_args.args[2]["offset"], 9010)
+        self.assertEqual(
+            api_call.call_args.args[2]["allowed_updates"],
+            '["channel_post","edited_channel_post"]',
+        )
 
     def test_cursor_commit_uses_supabase_service_key(self):
         environment = {
