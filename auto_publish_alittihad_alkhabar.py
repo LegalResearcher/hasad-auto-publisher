@@ -348,6 +348,17 @@ EXTENDED_RESPONSE_SCHEMA = {
     },
     "required": ["title", "excerpt", "content", "news_scope"],
 }
+TELEGRAM_EXTENDED_RESPONSE_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {
+        "title": {"type": "STRING"},
+        "excerpt": {"type": "STRING"},
+        "content": {"type": "STRING"},
+        "news_scope": {"type": "STRING"},
+        "houthi_iran_exclude": {"type": "BOOLEAN"},
+    },
+    "required": ["title", "excerpt", "content", "news_scope", "houthi_iran_exclude"],
+}
 
 # ══════════════════════════════════════════════════════════════════════
 #  🌍 تمييز الأخبار الدولية عبر Gemini نفسه (وليس عبر breadcrumb الموقع،
@@ -372,17 +383,23 @@ def rewrite_article_with_scope(
     body: str,
     category: str = "",
     video_url: Optional[str] = None,
+    telegram_source: bool = False,
 ) -> Optional[dict]:
     """يستخدم برومبت hasad_news_bot_fixed.build_prompt كما هو دون أي تعديل
     أو حذف، ويضيف إليه فقط تعليمة تصنيف الخبر (دولي/يمني) في نهايته."""
-    base_prompt = build_prompt(title, body, category)
+    base_prompt = build_prompt(
+        title, body, category,
+        bypass_content_filters=telegram_source,
+        video_url=video_url,
+    )
     video_instruction = (
         f"\n\nرابط الفيديو محفوظ في حقل خارجي؛ لا تذكره أو تنسخه داخل title أو excerpt أو content: {video_url}"
-        if video_url else ""
+        if video_url and not telegram_source else ""
     )
     prompt = base_prompt + SCOPE_INSTRUCTIONS_SUFFIX + video_instruction
+    response_schema = TELEGRAM_EXTENDED_RESPONSE_SCHEMA if telegram_source else EXTENDED_RESPONSE_SCHEMA
     for attempt in range(1, 3):
-        raw = call_with_rotation(prompt, schema=EXTENDED_RESPONSE_SCHEMA)
+        raw = call_with_rotation(prompt, schema=response_schema)
         try:
             data = json.loads(raw)
             if not all(k in data for k in ("title", "excerpt", "content", "news_scope")):
@@ -575,6 +592,7 @@ def run():
             it["raw_body"],
             base_category,
             video_url=it.get("_telegram_video_url"),
+            telegram_source=bool(it.get("_telegram_source") or it.get("_telegram_media_source")),
         )
         if not rewritten:
             if it.get("_telegram_source") or it.get("_telegram_media_source"):
