@@ -303,9 +303,16 @@ def send_to_telegram(
     safe_excerpt = html.escape((excerpt or "").strip())
     safe_article_url = html.escape(article_url or "", quote=True)
     channel_url = "https://t.me/hasadalyoum"
+    x_share_url = html.escape(
+        "https://x.com/intent/post?"
+        f"text={_urlquote((title or '').strip())}&"
+        f"url={_urlquote(article_url or '', safe='')}",
+        quote=True,
+    )
     footer = (
         f'\n\nــــــــــــــــــــــــــــ\n\n'
         f'<b>🔗 اقرأ الخبر كاملاً عبر موقع حصاد اليوم:\n{safe_article_url}\n\n'
+        f'𝕏 مشاركة الخبر على منصة X:\n{x_share_url}\n\n'
         f'📲 للاشتراك بالقناة عبر تيليجرام:\n{channel_url}</b>'
     )
 
