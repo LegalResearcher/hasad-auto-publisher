@@ -305,8 +305,8 @@ def send_to_telegram(
     channel_url = "https://t.me/hasadalyoum"
     footer = (
         f'\n\nــــــــــــــــــــــــــــ\n\n'
-        f'🔗 اقرأ الخبر كاملاً عبر موقع حصاد اليوم:\n{safe_article_url}\n\n'
-        f'📲 للاشتراك بالقناة عبر تيليجرام:\n{channel_url}'
+        f'<b>🔗 اقرأ الخبر كاملاً عبر موقع حصاد اليوم:\n{safe_article_url}\n\n'
+        f'📲 للاشتراك بالقناة عبر تيليجرام:\n{channel_url}</b>'
     )
 
     def build_caption(summary: str) -> str:
