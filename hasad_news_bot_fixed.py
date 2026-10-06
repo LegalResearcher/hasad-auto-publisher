@@ -312,7 +312,7 @@ def send_to_telegram(
     footer = (
         f'\n\nــــــــــــــــــــــــــــ\n\n'
         f'<b>🔗 اقرأ الخبر كاملاً عبر موقع حصاد اليوم:\n{safe_article_url}\n\n'
-        f'𝕏 مشاركة الخبر على منصة X:\n{x_share_url}\n\n'
+        f'𝕏 <a href="{x_share_url}">مشاركة الخبر على منصة X</a>\n\n'
         f'📲 للاشتراك بالقناة عبر تيليجرام:\n{channel_url}</b>'
     )
 
