@@ -291,6 +291,13 @@ SHARE_BASE_URL = "https://hasad-alyoum.com"
 TELEGRAM_CAPTION_LIMIT = 1024
 
 
+def _telegram_visible_length(text: str) -> int:
+    """Count visible UTF-16 characters, excluding HTML tags and hidden hrefs."""
+    without_tags = re.sub(r"<[^>]+>", "", text or "")
+    visible_text = html.unescape(without_tags)
+    return len(visible_text.encode("utf-16-le")) // 2
+
+
 def send_to_telegram(
     title: str,
     article_url: str,
@@ -328,8 +335,11 @@ def send_to_telegram(
         return f"<b>{safe_title}</b>{expandable}{footer}"
 
     caption = build_caption(safe_excerpt)
-    if len(caption) > TELEGRAM_CAPTION_LIMIT and safe_excerpt:
-        available = max(0, TELEGRAM_CAPTION_LIMIT - len(build_caption("")) - 40)
+    if _telegram_visible_length(caption) > TELEGRAM_CAPTION_LIMIT and safe_excerpt:
+        available = max(
+            0,
+            TELEGRAM_CAPTION_LIMIT - _telegram_visible_length(build_caption("")) - 40,
+        )
         safe_excerpt = safe_excerpt[:available].rstrip() + "…" if available else ""
         caption = build_caption(safe_excerpt)
 
