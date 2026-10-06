@@ -285,6 +285,7 @@ ADMIN_TELEGRAM_CHAT_ID = "85820797"
 SYSTEM_LOGS_ALERT_THRESHOLD = 50_000
 
 SITE_BASE_URL = "https://www.hasad-alyoum.com"
+SHARE_BASE_URL = "https://hasad-alyoum.com"
 
 
 TELEGRAM_CAPTION_LIMIT = 1024
@@ -295,6 +296,7 @@ def send_to_telegram(
     article_url: str,
     excerpt: str = "",
     image_url: Optional[str] = None,
+    share_url: Optional[str] = None,
 ) -> bool:
     if not TELEGRAM_ENABLED or not TELEGRAM_BOT_TOKEN:
         return False
@@ -303,10 +305,15 @@ def send_to_telegram(
     safe_excerpt = html.escape((excerpt or "").strip())
     safe_article_url = html.escape(article_url or "", quote=True)
     channel_url = "https://t.me/hasadalyoum"
+    x_post_text = (
+        f"{(excerpt or '').strip()}\n\n"
+        f"{(share_url or article_url or '').strip()}\n\n"
+        f"حصاد اليوم\n"
+        f"انضم إلى قناتنا: {channel_url}"
+    )
     x_share_url = html.escape(
         "https://x.com/intent/post?"
-        f"text={_urlquote((title or '').strip())}&"
-        f"url={_urlquote(article_url or '', safe='')}",
+        f"text={_urlquote(x_post_text, safe='')}",
         quote=True,
     )
     footer = (
@@ -2040,6 +2047,7 @@ def check_and_notify_scheduled_posts() -> None:
                 canonical_url,
                 entry.get("excerpt", ""),
                 entry.get("featured_image"),
+                share_url=f"{SHARE_BASE_URL}/share/{post_id}",
             ):
                 log.info(f"  📢 نُشر فعلياً وأُرسل لتيليجرام الآن: {entry.get('title', '')[:60]}")
                 notified += 1
@@ -3892,6 +3900,7 @@ def main():
                     canonical_url,
                     record.get("excerpt", ""),
                     record.get("featured_image"),
+                    share_url=f"{SHARE_BASE_URL}/share/{post_id}",
                 )
                 log_discovery_ready([canonical_url])
         else:
