@@ -85,6 +85,7 @@ from hasad_news_bot_fixed import (
     sb_insert,
     seed_views,
     build_canonical_url,
+    SHARE_BASE_URL,
     send_to_telegram,
     log_discovery_ready,
     apply_headline_design_to_image,
@@ -706,6 +707,7 @@ def run():
                 canonical_url,
                 record.get("excerpt", ""),
                 record.get("featured_image"),
+                share_url=f"{SHARE_BASE_URL}/share/{post_id}",
             )
 
             log_discovery_ready([canonical_url])
