@@ -145,6 +145,37 @@ class TelegramSourceItemTests(unittest.TestCase):
         self.assertEqual(item["_telegram_update_id"], 9001)
         self.assertEqual(item["pub_date"].tzinfo, timezone.utc)
 
+    def test_twitter_urgent_trigger_removes_marker_and_preserves_remaining_text(self):
+        original = "تويتر الخبر العاجل\nالتفاصيل كما وردت.\n"
+        self.assertEqual(
+            source.extract_twitter_urgent_body(original),
+            "الخبر العاجل\nالتفاصيل كما وردت.\n",
+        )
+
+    def test_twitter_urgent_trigger_requires_standalone_word_without_colon(self):
+        self.assertIsNone(source.extract_twitter_urgent_body("تويتر: هذا لا يطابق الكلمة المتفق عليها"))
+        self.assertIsNone(source.extract_twitter_urgent_body("تويترية ليست علامة تشغيل"))
+        self.assertIsNone(source.extract_twitter_urgent_body("خبر عن تويتر فقط"))
+        self.assertEqual(source.extract_twitter_urgent_body("تويتر"), "")
+
+    def test_original_telegram_text_is_kept_separately_for_verbatim_route(self):
+        original = "تويتر  عنوان الخبر\nالنص الأصلي  \n"
+        item = source._to_news_item({
+            "update_id": 9021,
+            "channel_post": {
+                "message_id": 62,
+                "date": 1790360000,
+                "chat": {"id": int(CHANNEL_ID)},
+                "text": original,
+            },
+        }, CHANNEL_ID)
+        self.assertEqual(item["raw_body"], original.strip())
+        self.assertEqual(item["_telegram_original_raw_text"], original)
+        self.assertEqual(
+            source.extract_twitter_urgent_body(item["_telegram_original_raw_text"]),
+            "عنوان الخبر\nالنص الأصلي  \n",
+        )
+
     def test_photo_caption_uses_largest_photo(self):
         update = {
             "update_id": 9002,

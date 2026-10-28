@@ -27,6 +27,22 @@ _VIDEO_HOST_RE = re.compile(
     re.IGNORECASE,
 )
 _VIDEO_EXT_RE = re.compile(r"\.(?:mp4|webm|mov|m3u8)(?:$|[?#])", re.IGNORECASE)
+_TWITTER_URGENT_MARKER_RE = re.compile(r"^[ \t]*تويتر(?=\s|$)")
+
+
+def extract_twitter_urgent_body(text: str | None) -> str | None:
+    """Return the verbatim text after a leading «تويتر» trigger, or None."""
+    value = text or ""
+    match = _TWITTER_URGENT_MARKER_RE.match(value)
+    if not match:
+        return None
+
+    body = value[match.end():]
+    if body.startswith("\r\n"):
+        return body[2:]
+    if body.startswith(("\n", "\r")):
+        return body[1:]
+    return re.sub(r"^[ \t]+", "", body, count=1)
 
 
 def extract_video_url(text: str, entities: list[dict[str, Any]] | None = None) -> str | None:
@@ -138,7 +154,8 @@ def _to_news_item(update: dict[str, Any], expected_chat_id: str) -> dict[str, An
     if str(chat.get("id", "")) != expected_chat_id:
         return None
 
-    raw_text = (post.get("text") or post.get("caption") or "").strip()
+    original_raw_text = str(post.get("text") or post.get("caption") or "")
+    raw_text = original_raw_text.strip()
     photo_sizes = post.get("photo") or []
     largest_photo = max(
         photo_sizes,
@@ -166,8 +183,12 @@ def _to_news_item(update: dict[str, Any], expected_chat_id: str) -> dict[str, An
     has_media = bool(image_file_id or video_url)
     is_attachment_reply = bool(reply_to_message_id and has_media)
     is_media_edit = bool(is_edited_post and has_media)
-    original_text = (reply_to.get("text") or reply_to.get("caption") or "").strip()
+    original_raw_text_for_reply = str(reply_to.get("text") or reply_to.get("caption") or "")
+    original_text = original_raw_text_for_reply.strip()
     article_text = original_text if is_attachment_reply and original_text else raw_text
+    article_text_original = (
+        original_raw_text_for_reply if is_attachment_reply and original_text else original_raw_text
+    )
     if not article_text and not (is_attachment_reply or is_media_edit):
         return None
 
@@ -190,6 +211,7 @@ def _to_news_item(update: dict[str, Any], expected_chat_id: str) -> dict[str, An
             "link": _post_link(chat, source_message_id),
             "pub_date": published_at,
             "raw_body": article_text,
+            "_telegram_original_raw_text": article_text_original,
             "source_feed": f"telegram://{expected_chat_id}",
             "image_url": None,
             "category": "أخبار وتقارير",
@@ -214,6 +236,7 @@ def _to_news_item(update: dict[str, Any], expected_chat_id: str) -> dict[str, An
         "link": _post_link(chat, message_id),
         "pub_date": published_at,
         "raw_body": raw_text,
+        "_telegram_original_raw_text": original_raw_text,
         "source_feed": f"telegram://{expected_chat_id}",
         "image_url": None,
         "category": "أخبار وتقارير",

@@ -22,7 +22,7 @@ LOCK_FILE_PATH = os.path.join(_DATA_DIR, "auto_publish_alittihad_alkhabar.lock")
 
 sys.path.insert(0, _SCRIPT_DIR)
 
-from alalam_breaking_publisher import publish_breaking_news
+from alalam_breaking_publisher import publish_breaking_news, update_breaking_ticker
 from hasad_news_bot_fixed import (
     log,
     RSS_MASA_URL,
@@ -98,6 +98,7 @@ from telegram_source import (
     TelegramFileTooLargeError,
     commit_telegram_cursor,
     download_telegram_photo,
+    extract_twitter_urgent_body,
     fetch_telegram_items,
     is_configured as is_telegram_source_configured,
     merge_photo_replies_with_news_items,
@@ -129,6 +130,7 @@ from telegram_source import (
 # ══════════════════════════════════════════════════════════════════════
 
 TARGET_CATEGORY = "أخبار وتقارير"
+URGENT_CATEGORY = "الأخبار العاجلة"
 INTERNATIONAL_CATEGORY = "شؤون دولية"
 SPORT_CATEGORY = "رياضة"
 TECH_CATEGORY = "منوعات وتكنولوجيا"
@@ -311,6 +313,126 @@ def _process_duplicate_telegram_media(duplicate_items: list[dict]) -> bool:
             )
             retry_required = True
     return retry_required
+
+
+def _split_twitter_urgent_items(items: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Route only Telegram posts beginning with «تويتر» to verbatim breaking news."""
+    regular_items = []
+    urgent_items = []
+    for item in items:
+        if not item.get("_telegram_source"):
+            regular_items.append(item)
+            continue
+
+        original_text = item.get("_telegram_original_raw_text", item.get("raw_body", ""))
+        verbatim_text = extract_twitter_urgent_body(original_text)
+        if verbatim_text is None:
+            regular_items.append(item)
+            continue
+        if not verbatim_text.strip():
+            log.warning("⚠️ تم تجاهل منشور Telegram بدأ بكلمة «تويتر» لكنه لا يحتوي نص خبر بعدها.")
+            continue
+
+        urgent_item = dict(item)
+        urgent_item["_urgent_verbatim_text"] = verbatim_text
+        urgent_item["raw_body"] = verbatim_text
+        urgent_item["title"] = next(
+            (line.strip() for line in verbatim_text.splitlines() if line.strip()),
+            "",
+        )
+        urgent_items.append(urgent_item)
+    return regular_items, urgent_items
+
+
+def _publish_urgent_telegram_item(
+    item: dict,
+    existing_urls: set[str],
+    blocked_links: set[str],
+) -> bool:
+    """Insert a marked Telegram post into the breaking-news category without rewriting."""
+    source_url = str(item.get("link") or "")
+    if not source_url or source_url in existing_urls or source_url in blocked_links:
+        log.info("ℹ️ تخطي منشور عاجل من Telegram لأنه منشور أو محظور مسبقًا.")
+        return True
+
+    raw_content = str(item.get("_urgent_verbatim_text") or "")
+    title = str(item.get("title") or "").strip()
+    if not raw_content.strip() or not title:
+        log.warning("⚠️ تخطي منشور Telegram العاجل لعدم وجود نص أو عنوان.")
+        return True
+
+    category_id = get_category_id(URGENT_CATEGORY)
+    if not category_id:
+        log.error("❌ قسم الأخبار العاجلة غير موجود في الموقع؛ سيعاد فحص منشور Telegram لاحقًا.")
+        return False
+
+    item_date = item["pub_date"].isoformat()
+    words, reading_time = word_stats(raw_content)
+    image_url = thumbnail_url = None
+    photo_file_id = item.get("_telegram_photo_file_id")
+    if photo_file_id:
+        try:
+            source_image = download_telegram_photo(photo_file_id)
+        except TelegramFileTooLargeError as exc:
+            log.warning("⚠️ صورة الخبر العاجل أكبر من حد التنزيل؛ سينشر النص دون صورة: %s", exc)
+        except Exception as exc:
+            log.error("❌ تعذّر تنزيل صورة الخبر العاجل من Telegram؛ ستعاد المحاولة: %s", exc)
+            return False
+        else:
+            try:
+                image_url, thumbnail_url = get_post_image_urls(
+                    None,
+                    headline_text=title,
+                    source_image_bytes=source_image,
+                )
+            except Exception as exc:
+                log.error("❌ تعذّرت معالجة صورة الخبر العاجل؛ ستعاد المحاولة: %s", exc)
+                return False
+
+    record = {
+        "title": title,
+        "slug": make_slug(title),
+        "excerpt": title,
+        "content": raw_content,
+        "category_id": category_id,
+        "source_type": "حصاد اليوم | أخبار عاجلة",
+        "source_url": source_url,
+        "status": "published",
+        "word_count": words,
+        "reading_time": reading_time,
+        "created_at": item_date,
+        "updated_at": item_date,
+        "published_at": item_date,
+        "featured_image": image_url,
+        "thumbnail_image": thumbnail_url,
+        "external_video_url": item.get("_telegram_video_url"),
+        "is_featured": False,
+        "is_breaking": True,
+    }
+    post_id = sb_insert(record)
+    if not post_id:
+        log.error("❌ فشل إدخال الخبر العاجل إلى الموقع؛ سيعاد فحص منشور Telegram لاحقًا.")
+        return False
+
+    log_published_title(record["title"], record["created_at"])
+    log_raw_content(title, raw_content, record["created_at"])
+    save_blocked_link(source_url)
+    existing_urls.add(source_url)
+    blocked_links.add(source_url)
+    seed_views(post_id)
+    ticker_path = os.path.join(_SCRIPT_DIR, "breaking-news.json")
+    try:
+        with open(ticker_path, encoding="utf-8") as ticker_file:
+            ticker_items = json.load(ticker_file).get("items", [])
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        ticker_items = []
+    ticker_items = [title] + [headline for headline in ticker_items if headline != title]
+    try:
+        update_breaking_ticker(ticker_items[:3])
+    except Exception as exc:
+        log.warning("⚠️ نُشر الخبر العاجل لكن تعذّر تحديث شريط العاجل: %s", exc)
+    log.info("✅ نُشر خبر Telegram العاجل حرفيًا في الموقع: %s", title[:70])
+    return True
 
 
 # فيد الرياضة (سكاي نيوز عربية) — مضاف مباشرة هنا لأنه غير معرّف
@@ -518,6 +640,7 @@ def run():
         it for it in items
         if it["link"] not in existing_urls and it["link"] not in blocked_links
     ]
+    new_items, urgent_telegram_items = _split_twitter_urgent_items(new_items)
     duplicate_media_items: list[dict] = []
     # 🥇 الطبقة الأولى: مقارنة المتن الخام (قبل Gemini) — تمسك حالات نسخ
     # البيانات الرسمية حرفياً أو شبه حرفياً عبر عدة فيدات، وتوفر استدعاء
@@ -563,25 +686,42 @@ def run():
             it["image_url"] = None
 
     log.info("─" * 60)
-    log.info(f"✅ إجمالي الأخبار الجديدة المؤهلة للنشر: {len(new_items)}")
+    log.info(
+        "✅ إجمالي الأخبار الجديدة المؤهلة للنشر: %s (منها %s عاجل حرفي من Telegram)",
+        len(new_items) + len(urgent_telegram_items),
+        len(urgent_telegram_items),
+    )
     log.info("─" * 60)
 
-    if not new_items:
+    if not new_items and not urgent_telegram_items:
         log.info("لا يوجد أخبار جديدة حالياً.")
         finalize_telegram_poll()
         return
 
-    apply_full_extraction(new_items)
-    if any(it.get("_excluded") and it.get("_telegram_media_source") for it in new_items):
-        telegram_retry_required = True
-    new_items = [it for it in new_items if not it.get("_excluded")]
+    if new_items:
+        apply_full_extraction(new_items)
+        if any(it.get("_excluded") and it.get("_telegram_media_source") for it in new_items):
+            telegram_retry_required = True
+        new_items = [it for it in new_items if not it.get("_excluded")]
 
-    if not new_items:
+    if not new_items and not urgent_telegram_items:
         log.info("لا يوجد أخبار جديدة حالياً بعد الاستبعاد.")
         finalize_telegram_poll()
         return
 
     ok = fail = skipped = 0
+
+    for urgent_item in urgent_telegram_items:
+        try:
+            if _publish_urgent_telegram_item(urgent_item, existing_urls, blocked_links):
+                ok += 1
+            else:
+                fail += 1
+                telegram_retry_required = True
+        except Exception as exc:
+            log.error("❌ استثناء أثناء نشر خبر Telegram العاجل؛ سيعاد فحصه: %s", exc)
+            fail += 1
+            telegram_retry_required = True
 
     for it in new_items:
         base_category = it["category"] or TARGET_CATEGORY
