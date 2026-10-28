@@ -7,9 +7,10 @@ has been handled, so transient failures are retried on the next run.
 from __future__ import annotations
 
 import logging
+import json
 import os
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import requests
@@ -18,6 +19,7 @@ CURSOR_KEY = "hasad_private_source_channel"
 CURSOR_TABLE = "bot_source_cursors"
 REQUEST_TIMEOUT = 30
 MAX_TELEGRAM_DOWNLOAD_BYTES = 20 * 1024 * 1024
+PENDING_TWITTER_TTL = timedelta(minutes=30)
 logger = logging.getLogger(__name__)
 
 _URL_RE = re.compile(r"https?://[^\s<>\]\[(){}]+", re.IGNORECASE)
@@ -39,10 +41,66 @@ def extract_twitter_urgent_body(text: str | None) -> str | None:
 
     body = value[match.end():]
     if body.startswith("\r\n"):
-        return body[2:]
-    if body.startswith(("\n", "\r")):
-        return body[1:]
-    return re.sub(r"^[ \t]+", "", body, count=1)
+        body = body[2:]
+    elif body.startswith(("\n", "\r")):
+        body = body[1:]
+    else:
+        body = re.sub(r"^[ \t]+", "", body, count=1)
+    if body.lstrip(" \t").startswith(":"):
+        return None
+    return body
+
+
+def _pending_twitter_state_path() -> str:
+    data_dir = os.environ.get("BOT_DATA_DIR") or os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "hasad_data"
+    )
+    return os.path.join(data_dir, "pending_twitter_forwards.json")
+
+
+def _save_pending_twitter_triggers(pending: dict[str, str]) -> None:
+    path = _pending_twitter_state_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    temporary_path = f"{path}.{os.getpid()}.tmp"
+    with open(temporary_path, "w", encoding="utf-8") as state_file:
+        json.dump({"pending": pending}, state_file, ensure_ascii=False, indent=2)
+    os.replace(temporary_path, path)
+
+
+def _load_pending_twitter_triggers() -> dict[str, str]:
+    path = _pending_twitter_state_path()
+    try:
+        with open(path, encoding="utf-8") as state_file:
+            saved = json.load(state_file).get("pending", {})
+    except (FileNotFoundError, json.JSONDecodeError, OSError, AttributeError):
+        return {}
+
+    now = datetime.now(timezone.utc)
+    pending: dict[str, str] = {}
+    entries = saved.items() if isinstance(saved, dict) else []
+    for user_id, timestamp in entries:
+        try:
+            started_at = datetime.fromisoformat(str(timestamp))
+            if started_at.tzinfo is None:
+                started_at = started_at.replace(tzinfo=timezone.utc)
+            if timedelta(0) <= now - started_at <= PENDING_TWITTER_TTL:
+                pending[str(user_id)] = started_at.isoformat()
+        except (TypeError, ValueError):
+            continue
+    if pending != saved:
+        _save_pending_twitter_triggers(pending)
+    return pending
+
+
+def clear_pending_twitter_triggers(user_ids: set[str] | list[str] | tuple[str, ...]) -> None:
+    pending = _load_pending_twitter_triggers()
+    changed = False
+    for user_id in user_ids:
+        if str(user_id) in pending:
+            pending.pop(str(user_id), None)
+            changed = True
+    if changed:
+        _save_pending_twitter_triggers(pending)
 
 
 def extract_video_url(text: str, entities: list[dict[str, Any]] | None = None) -> str | None:
@@ -248,6 +306,120 @@ def _to_news_item(update: dict[str, Any], expected_chat_id: str) -> dict[str, An
     }
 
 
+def _private_message_source_link(message: dict[str, Any], sender_id: str) -> str:
+    """Use a forwarded channel permalink when available, else a stable private ID."""
+    origin = message.get("forward_origin") or {}
+    if origin.get("type") == "channel":
+        chat = origin.get("chat") or {}
+        message_id = origin.get("message_id")
+        if message_id:
+            return _post_link(chat, int(message_id))
+
+    forwarded_chat = message.get("forward_from_chat") or {}
+    forwarded_message_id = message.get("forward_from_message_id")
+    if forwarded_chat and forwarded_message_id:
+        return _post_link(forwarded_chat, int(forwarded_message_id))
+
+    chat = message.get("chat") or {}
+    chat_id = str(chat.get("id") or sender_id)
+    return f"telegram-private://{chat_id}/{int(message['message_id'])}"
+
+
+def _private_message_to_news_item(
+    update: dict[str, Any],
+    allowed_user_ids: set[str],
+    pending_triggers: dict[str, str],
+    consumed_pending_users: set[str],
+) -> dict[str, Any] | None:
+    """Accept only authorized private messages explicitly routed to urgent news."""
+    message = update.get("message")
+    if not isinstance(message, dict):
+        return None
+    chat = message.get("chat") or {}
+    sender = message.get("from") or {}
+    sender_id = str(sender.get("id") or "")
+    if chat.get("type") != "private" or not sender_id or sender_id not in allowed_user_ids:
+        return None
+    if sender.get("is_bot"):
+        return None
+
+    original_text = str(message.get("text") or message.get("caption") or "")
+    trigger_body = extract_twitter_urgent_body(original_text)
+    pending_user_id = None
+    if trigger_body is not None:
+        if not trigger_body.strip():
+            pending_triggers[sender_id] = datetime.now(timezone.utc).isoformat()
+            return None
+        pending_triggers.pop(sender_id, None)
+        tagged_text = original_text
+    elif sender_id in pending_triggers and sender_id not in consumed_pending_users:
+        if not original_text.strip():
+            return None
+        # A standalone «تويتر» command arms this sender's next text/caption,
+        # including a forwarded Telegram post, for the urgent verbatim route.
+        tagged_text = "تويتر\n" + original_text
+        pending_user_id = sender_id
+        consumed_pending_users.add(sender_id)
+    else:
+        return None
+
+    verbatim_body = extract_twitter_urgent_body(tagged_text)
+    if not verbatim_body or not verbatim_body.strip():
+        return None
+
+    photo_sizes = message.get("photo") or []
+    largest_photo = max(
+        photo_sizes,
+        key=lambda photo: (
+            int(photo.get("width") or 0) * int(photo.get("height") or 0),
+            int(photo.get("file_size") or 0),
+        ),
+        default=None,
+    )
+    document = message.get("document") or {}
+    document_is_image = str(document.get("mime_type") or "").lower().startswith("image/")
+    if not document_is_image and not document.get("mime_type"):
+        document_is_image = bool(re.search(
+            r"\.(?:jpe?g|png|webp|gif|bmp|tiff?)$",
+            str(document.get("file_name") or ""),
+            re.IGNORECASE,
+        ))
+    photo_file_id = (largest_photo or {}).get("file_id") or (
+        document.get("file_id") if document_is_image else None
+    )
+    entities = (message.get("entities") or []) + (message.get("caption_entities") or [])
+    video_url = extract_video_url(original_text, entities)
+    message_date = int(message.get("date") or 0)
+    published_at = (
+        datetime.fromtimestamp(message_date, tz=timezone.utc)
+        if message_date
+        else datetime.now(timezone.utc)
+    )
+    lines = [line.strip() for line in verbatim_body.splitlines() if line.strip()]
+    title = lines[0] if lines else verbatim_body.strip()
+    source_chat_id = str(chat.get("id") or sender_id)
+
+    item = {
+        "title": title,
+        "link": _private_message_source_link(message, sender_id),
+        "pub_date": published_at,
+        "raw_body": tagged_text.strip(),
+        "_telegram_original_raw_text": tagged_text,
+        "source_feed": f"telegram-private://{source_chat_id}",
+        "image_url": None,
+        "category": "أخبار وتقارير",
+        "author": None,
+        "_telegram_source": True,
+        "_telegram_private_source": True,
+        "_telegram_update_id": int(update["update_id"]),
+        "_telegram_photo_file_id": photo_file_id,
+        "_telegram_video_url": video_url,
+    }
+    if pending_user_id:
+        item["_pending_twitter_user_id"] = pending_user_id
+    return item
+
+
 def merge_photo_replies_with_news_items(
     items: list[dict[str, Any]],
     existing_source_urls: set[str] | None = None,
@@ -434,6 +606,21 @@ def _verify_source_channel(token: str, expected_chat_id: str) -> str:
     return username
 
 
+def _get_authorized_private_user_ids(token: str, expected_chat_id: str) -> set[str]:
+    admins = _telegram_api_call(
+        token,
+        "getChatAdministrators",
+        {"chat_id": expected_chat_id},
+    ).get("result") or []
+    return {
+        str((admin.get("user") or {}).get("id"))
+        for admin in admins
+        if (admin.get("user") or {}).get("id")
+        and not (admin.get("user") or {}).get("is_bot")
+        and str(admin.get("status") or "") in {"administrator", "creator"}
+    }
+
+
 def fetch_telegram_items() -> tuple[list[dict[str, Any]], int | None]:
     """Fetch pending posts and return the maximum update id for later commit."""
     if not is_configured():
@@ -449,18 +636,30 @@ def fetch_telegram_items() -> tuple[list[dict[str, Any]], int | None]:
             "offset": last_update_id + 1,
             "limit": 100,
             "timeout": 0,
-            "allowed_updates": '["channel_post","edited_channel_post"]',
+            "allowed_updates": '["channel_post","edited_channel_post","message"]',
         },
     )
     updates = payload.get("result") or []
     if not updates:
         logger.info(
-            "Telegram source returned no pending channel_post/edited_channel_post updates for configured channel %s.",
+            "Telegram source returned no pending channel or private-message updates for configured channel %s.",
             expected_chat_id,
         )
         return [], None
 
     highest_update_id = max(int(update["update_id"]) for update in updates)
+    private_updates = [
+        update for update in updates
+        if isinstance(update.get("message"), dict)
+        and (update.get("message").get("chat") or {}).get("type") == "private"
+    ]
+    authorized_user_ids = (
+        _get_authorized_private_user_ids(token, expected_chat_id)
+        if private_updates else set()
+    )
+    pending_triggers = _load_pending_twitter_triggers() if private_updates else {}
+    initial_pending_triggers = pending_triggers.copy()
+    consumed_pending_users: set[str] = set()
     channel_posts = [
         update.get("channel_post") or update.get("edited_channel_post")
         for update in updates
@@ -487,12 +686,14 @@ def fetch_telegram_items() -> tuple[list[dict[str, Any]], int | None]:
     )
     logger.info(
         "Telegram update diagnostics: updates=%s, channel_posts=%s, matching_chat=%s, "
-        "matching_with_text_or_caption=%s, matching_with_photo_or_image_document=%s.",
+        "matching_with_text_or_caption=%s, matching_with_photo_or_image_document=%s, private_messages=%s, authorized_admins=%s.",
         len(updates),
         len(channel_posts),
         len(matching_posts),
         matching_with_text,
         matching_with_photo,
+        len(private_updates),
+        len(authorized_user_ids),
     )
     if channel_posts and not matching_posts:
         logger.warning(
@@ -508,8 +709,17 @@ def fetch_telegram_items() -> tuple[list[dict[str, Any]], int | None]:
     items = []
     for update in updates:
         item = _to_news_item(update, expected_chat_id)
+        if item is None and private_updates:
+            item = _private_message_to_news_item(
+                update,
+                authorized_user_ids,
+                pending_triggers,
+                consumed_pending_users,
+            )
         if item:
             items.append(item)
+    if pending_triggers != initial_pending_triggers:
+        _save_pending_twitter_triggers(pending_triggers)
     return items, highest_update_id
 
 

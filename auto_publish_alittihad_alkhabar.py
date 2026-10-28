@@ -96,6 +96,7 @@ from hasad_news_bot_fixed import (
 import json
 from telegram_source import (
     TelegramFileTooLargeError,
+    clear_pending_twitter_triggers,
     commit_telegram_cursor,
     download_telegram_photo,
     extract_twitter_urgent_body,
@@ -611,9 +612,15 @@ def run():
     telegram_cursor = None
     telegram_source_error = None
     telegram_retry_required = False
+    telegram_pending_user_ids: set[str] = set()
     try:
         if is_telegram_source_configured():
             telegram_items, telegram_cursor = fetch_telegram_items()
+            telegram_pending_user_ids = {
+                str(item["_pending_twitter_user_id"])
+                for item in telegram_items
+                if item.get("_pending_twitter_user_id")
+            }
             telegram_items, photo_replies = merge_photo_replies_with_news_items(
                 telegram_items,
                 existing_source_urls=existing_urls | blocked_links,
@@ -622,7 +629,7 @@ def run():
                 telegram_retry_required = _process_late_telegram_photo_replies(photo_replies)
         else:
             telegram_items = []
-        log.info(f"📨 منشورات تيليجرام الجديدة من قناة حصاد: {len(telegram_items)}")
+        log.info(f"📨 عناصر Telegram الجديدة من القناة والخاص: {len(telegram_items)}")
     except Exception as exc:
         telegram_items = []
         telegram_source_error = exc
@@ -631,6 +638,8 @@ def run():
     def finalize_telegram_poll(retry_required: bool = False) -> None:
         if telegram_cursor is not None and not (retry_required or telegram_retry_required):
             commit_telegram_cursor(telegram_cursor)
+            if telegram_pending_user_ids:
+                clear_pending_twitter_triggers(telegram_pending_user_ids)
         if telegram_source_error:
             raise RuntimeError("Telegram source polling failed; see the logged error above.") from telegram_source_error
 

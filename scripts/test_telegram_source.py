@@ -1,5 +1,6 @@
 import os
 import sys
+import tempfile
 import unittest
 from datetime import timezone
 from pathlib import Path
@@ -154,6 +155,8 @@ class TelegramSourceItemTests(unittest.TestCase):
 
     def test_twitter_urgent_trigger_requires_standalone_word_without_colon(self):
         self.assertIsNone(source.extract_twitter_urgent_body("تويتر: هذا لا يطابق الكلمة المتفق عليها"))
+        self.assertIsNone(source.extract_twitter_urgent_body("تويتر : هذا لا يطابق الكلمة المتفق عليها"))
+        self.assertIsNone(source.extract_twitter_urgent_body("تويتر\n: هذا لا يطابق الكلمة المتفق عليها"))
         self.assertIsNone(source.extract_twitter_urgent_body("تويترية ليست علامة تشغيل"))
         self.assertIsNone(source.extract_twitter_urgent_body("خبر عن تويتر فقط"))
         self.assertEqual(source.extract_twitter_urgent_body("تويتر"), "")
@@ -175,6 +178,96 @@ class TelegramSourceItemTests(unittest.TestCase):
             source.extract_twitter_urgent_body(item["_telegram_original_raw_text"]),
             "عنوان الخبر\nالنص الأصلي  \n",
         )
+
+    def test_authorized_private_message_with_twitter_prefix_becomes_urgent_item(self):
+        update = {
+            "update_id": 9022,
+            "message": {
+                "message_id": 70,
+                "date": 1790360000,
+                "chat": {"id": 12345, "type": "private"},
+                "from": {"id": 12345, "is_bot": False},
+                "text": "تويتر خبر عاجل\nالنص كما كُتب",
+            },
+        }
+        item = source._private_message_to_news_item(update, {"12345"}, {}, set())
+        self.assertIsNotNone(item)
+        self.assertTrue(item["_telegram_private_source"])
+        self.assertEqual(item["title"], "خبر عاجل")
+        self.assertEqual(
+            source.extract_twitter_urgent_body(item["_telegram_original_raw_text"]),
+            "خبر عاجل\nالنص كما كُتب",
+        )
+        self.assertEqual(item["link"], "telegram-private://12345/70")
+
+    def test_private_message_from_non_admin_is_ignored(self):
+        update = {
+            "update_id": 9023,
+            "message": {
+                "message_id": 71,
+                "date": 1790360000,
+                "chat": {"id": 99999, "type": "private"},
+                "from": {"id": 99999, "is_bot": False},
+                "text": "تويتر لا ينبغي نشره",
+            },
+        }
+        self.assertIsNone(source._private_message_to_news_item(update, {"12345"}, {}, set()))
+        authorized_but_unmarked = {
+            **update,
+            "message": {
+                **update["message"],
+                "chat": {"id": 12345, "type": "private"},
+                "from": {"id": 12345, "is_bot": False},
+                "text": "رسالة خاصة عادية لا تُنشر",
+            },
+        }
+        self.assertIsNone(
+            source._private_message_to_news_item(authorized_but_unmarked, {"12345"}, {}, set())
+        )
+
+    def test_standalone_twitter_command_arms_the_next_forwarded_post(self):
+        pending = {}
+        consumed = set()
+        trigger_update = {
+            "update_id": 9024,
+            "message": {
+                "message_id": 72,
+                "date": 1790360000,
+                "chat": {"id": 12345, "type": "private"},
+                "from": {"id": 12345, "is_bot": False},
+                "text": "تويتر",
+            },
+        }
+        self.assertIsNone(
+            source._private_message_to_news_item(trigger_update, {"12345"}, pending, consumed)
+        )
+        self.assertIn("12345", pending)
+
+        forward_update = {
+            "update_id": 9025,
+            "message": {
+                "message_id": 73,
+                "date": 1790360010,
+                "chat": {"id": 12345, "type": "private"},
+                "from": {"id": 12345, "is_bot": False},
+                "forward_origin": {
+                    "type": "channel",
+                    "chat": {"id": int(CHANNEL_ID), "username": "sourcechannel"},
+                    "message_id": 88,
+                },
+                "text": "العنوان المحوّل\nالنص الأصلي",
+            },
+        }
+        item = source._private_message_to_news_item(
+            forward_update, {"12345"}, pending, consumed
+        )
+        self.assertEqual(item["link"], "https://t.me/sourcechannel/88")
+        self.assertEqual(item["_pending_twitter_user_id"], "12345")
+        self.assertEqual(
+            source.extract_twitter_urgent_body(item["_telegram_original_raw_text"]),
+            "العنوان المحوّل\nالنص الأصلي",
+        )
+        self.assertIn("12345", pending)  # removed only after successful cursor commit
 
     def test_photo_caption_uses_largest_photo(self):
         update = {
@@ -354,6 +447,17 @@ class TelegramSourceItemTests(unittest.TestCase):
 
 
 class TelegramPollingTests(unittest.TestCase):
+    def test_pending_twitter_trigger_persists_and_can_be_cleared(self):
+        with tempfile.TemporaryDirectory() as data_dir, mock.patch.dict(
+            os.environ, {"BOT_DATA_DIR": data_dir}
+        ):
+            source._save_pending_twitter_triggers({
+                "12345": source.datetime.now(timezone.utc).isoformat(),
+            })
+            self.assertIn("12345", source._load_pending_twitter_triggers())
+            source.clear_pending_twitter_triggers({"12345"})
+            self.assertEqual(source._load_pending_twitter_triggers(), {})
+
     def test_fetch_uses_source_secrets_and_resumes_after_saved_update(self):
         update = {
             "update_id": 9010,
@@ -388,8 +492,65 @@ class TelegramPollingTests(unittest.TestCase):
         self.assertEqual(api_call.call_args.args[2]["offset"], 9010)
         self.assertEqual(
             api_call.call_args.args[2]["allowed_updates"],
-            '["channel_post","edited_channel_post"]',
+            '["channel_post","edited_channel_post","message"]',
         )
+
+    def test_fetch_arms_private_twitter_command_for_forwarded_message(self):
+        updates = [
+            {
+                "update_id": 9026,
+                "message": {
+                    "message_id": 74,
+                    "date": 1790360000,
+                    "chat": {"id": 12345, "type": "private"},
+                    "from": {"id": 12345, "is_bot": False},
+                    "text": "تويتر",
+                },
+            },
+            {
+                "update_id": 9027,
+                "message": {
+                    "message_id": 75,
+                    "date": 1790360010,
+                    "chat": {"id": 12345, "type": "private"},
+                    "from": {"id": 12345, "is_bot": False},
+                    "forward_origin": {
+                        "type": "channel",
+                        "chat": {"id": int(CHANNEL_ID), "username": "sourcechannel"},
+                        "message_id": 89,
+                    },
+                    "text": "عنوان محوّل\nتفاصيل المنشور",
+                },
+            },
+        ]
+        environment = {
+            "TELEGRAM_SOURCE_BOT_TOKEN": "test-source-token",
+            "TELEGRAM_SOURCE_CHAT_ID": CHANNEL_ID,
+            "SUPABASE_URL": "https://supabase.example",
+            "SUPABASE_SERVICE_KEY": "test-service-key",
+        }
+        with (
+            mock.patch.dict(os.environ, environment),
+            mock.patch.object(source, "get_last_update_id", return_value=9025),
+            mock.patch.object(source, "_ensure_polling_mode"),
+            mock.patch.object(source, "_verify_source_channel", return_value="test_bot"),
+            mock.patch.object(source, "_get_authorized_private_user_ids", return_value={"12345"}),
+            mock.patch.object(source, "_load_pending_twitter_triggers", return_value={}),
+            mock.patch.object(source, "_save_pending_twitter_triggers") as save_pending,
+            mock.patch.object(source, "_telegram_api_call", return_value={"result": updates}),
+        ):
+            items, cursor = source.fetch_telegram_items()
+
+        self.assertEqual(cursor, 9027)
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["link"], "https://t.me/sourcechannel/89")
+        self.assertEqual(
+            source.extract_twitter_urgent_body(items[0]["_telegram_original_raw_text"]),
+            "عنوان محوّل\nتفاصيل المنشور",
+        )
+        self.assertEqual(items[0]["_pending_twitter_user_id"], "12345")
+        save_pending.assert_called_once()
+        self.assertIn("12345", save_pending.call_args.args[0])
 
     def test_cursor_commit_uses_supabase_service_key(self):
         environment = {
