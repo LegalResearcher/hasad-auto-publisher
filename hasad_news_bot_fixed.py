@@ -406,10 +406,30 @@ def process_telegram_section_controls() -> None:
             json.dump({"offset": offset}, f)
 
 
+_TELEGRAM_REMOTE_SECTION_STATE: Optional[dict[str, bool]] = None
+
+
 def is_telegram_section_enabled(category: Optional[str]) -> bool:
+    """Read the webhook-controlled state; leave site publishing untouched."""
+    global _TELEGRAM_REMOTE_SECTION_STATE
     if not category:
         return True
-    return _load_telegram_section_state().get(category, True)
+    if _TELEGRAM_REMOTE_SECTION_STATE is None:
+        try:
+            response = requests.get(
+                f"{SUPABASE_URL}/rest/v1/bot_telegram_section_controls",
+                params={"select": "category,enabled", "limit": "200"},
+                headers={"apikey": SUPABASE_ANON_KEY, "Authorization": f"Bearer {SUPABASE_ANON_KEY}"},
+                timeout=REQUEST_TIMEOUT,
+            )
+            response.raise_for_status()
+            _TELEGRAM_REMOTE_SECTION_STATE = {
+                row["category"]: bool(row["enabled"]) for row in response.json()
+            }
+        except (requests.RequestException, ValueError, KeyError, TypeError) as exc:
+            log.warning("تعذّر قراءة حالة أقسام قناة Telegram من Supabase: %s", exc)
+            _TELEGRAM_REMOTE_SECTION_STATE = _load_telegram_section_state()
+    return _TELEGRAM_REMOTE_SECTION_STATE.get(category, True)
 
 
 def _telegram_visible_length(text: str) -> int:

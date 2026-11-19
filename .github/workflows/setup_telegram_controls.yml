@@ -1,0 +1,47 @@
+name: تهيئة التحكم الفوري بأقسام Telegram
+on:
+  workflow_dispatch: {}
+permissions:
+  contents: read
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure Telegram webhook without exposing credentials
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import urllib.request
+          import urllib.error
+
+          base = os.environ["SUPABASE_URL"].rstrip("/")
+          service_key = os.environ["SUPABASE_SERVICE_KEY"]
+          bot_token = os.environ["TELEGRAM_BOT_TOKEN"]
+          url = f"{base}/functions/v1/telegram-section-controls/setup"
+          body = json.dumps({"bot_token": bot_token}).encode()
+          request = urllib.request.Request(
+              url,
+              data=body,
+              headers={
+                  "Authorization": f"Bearer {service_key}",
+                  "apikey": service_key,
+                  "Content-Type": "application/json",
+              },
+              method="POST",
+          )
+          try:
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  result = json.loads(response.read())
+          except urllib.error.HTTPError as error:
+              print(f"تهيئة Webhook فشلت (HTTP {error.code}); راجع أسرار Supabase/GitHub وسجلات Edge Function.")
+              raise SystemExit(1)
+          if not result.get("ok"):
+              print("تهيئة Webhook لم تكتمل؛ راجع إعدادات Supabase.")
+              raise SystemExit(1)
+          print(f"تم تفعيل Webhook للبوت @{result.get('bot_username', 'unknown')}.")
+          PY
