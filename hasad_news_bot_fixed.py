@@ -319,6 +319,19 @@ def _telegram_section_keyboard(state: dict[str, bool]) -> list[list[dict]]:
     }] for i, name in enumerate(TELEGRAM_SECTION_NAMES)]
 
 
+def _telegram_persistent_keyboard(state: dict[str, bool]) -> dict:
+    labels = [
+        f"{'▶️ تشغيل' if not state[name] else '⏸ إيقاف'} {name}"
+        for name in TELEGRAM_SECTION_NAMES
+    ]
+    return {
+        "keyboard": [labels[i:i + 2] for i in range(0, len(labels), 2)],
+        "resize_keyboard": True,
+        "is_persistent": True,
+        "one_time_keyboard": False,
+    }
+
+
 def process_telegram_section_controls() -> None:
     """يعالج /sections ونقرات لوحة الإدارة أثناء كل تشغيل للناشر."""
     if not TELEGRAM_BOT_TOKEN or not ADMIN_TELEGRAM_CHAT_ID:
@@ -361,8 +374,30 @@ def process_telegram_section_controls() -> None:
                     changed = True
                     requests.post(f"{api}/answerCallbackQuery", json={"callback_query_id": callback["id"], "text": f"تم {'تشغيل' if state[name] else 'إيقاف'} {name}"}, timeout=REQUEST_TIMEOUT)
                     requests.post(f"{api}/editMessageReplyMarkup", json={"chat_id": chat_id, "message_id": message.get("message_id"), "reply_markup": {"inline_keyboard": _telegram_section_keyboard(state)}}, timeout=REQUEST_TIMEOUT)
-        elif (message.get("text") or "").strip().split()[0:1] in (["/sections"], ["/start"]):
-            requests.post(f"{api}/sendMessage", json={"chat_id": chat_id, "text": "تحكم بنشر الأخبار في قناة تيليجرام فقط. إيقاف القسم لا يؤثر على نشره في الموقع:", "reply_markup": {"inline_keyboard": _telegram_section_keyboard(state)}}, timeout=REQUEST_TIMEOUT)
+        else:
+            text = (message.get("text") or "").strip()
+            command = text.split()[0] if text else ""
+            if command in ("/sections", "/start"):
+                requests.post(f"{api}/sendMessage", json={
+                    "chat_id": chat_id,
+                    "text": "أزرار التحكم بأقسام قناة تيليجرام ظاهرة أسفل المحادثة. إيقاف القسم لا يؤثر على نشره في الموقع.",
+                    "reply_markup": _telegram_persistent_keyboard(state),
+                }, timeout=REQUEST_TIMEOUT)
+            else:
+                for name in TELEGRAM_SECTION_NAMES:
+                    if text == f"⏸ إيقاف {name}":
+                        state[name] = False
+                    elif text == f"▶️ تشغيل {name}":
+                        state[name] = True
+                    else:
+                        continue
+                    changed = True
+                    requests.post(f"{api}/sendMessage", json={
+                        "chat_id": chat_id,
+                        "text": f"تم {'تشغيل' if state[name] else 'إيقاف'} {name} في قناة تيليجرام فقط.",
+                        "reply_markup": _telegram_persistent_keyboard(state),
+                    }, timeout=REQUEST_TIMEOUT)
+                    break
         offset = next_offset
     if changed:
         _save_telegram_section_state(state)
