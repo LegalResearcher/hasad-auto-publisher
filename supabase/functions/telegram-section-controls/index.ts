@@ -162,6 +162,7 @@ Deno.serve(async (request: Request) => {
         allowed_updates: ["message", "callback_query"],
         drop_pending_updates: false,
       });
+      await sendMenu(bot_token, ADMIN_CHAT_ID, "لوحة التحكم بأقسام قناة تيليجرام جاهزة. الإيقاف لا يؤثر على النشر في الموقع.");
       return json({ ok: true, bot_username: me.username });
     } catch (_error) {
       return json({ error: "Webhook setup failed; check the configured credentials and Supabase logs" }, 502);
