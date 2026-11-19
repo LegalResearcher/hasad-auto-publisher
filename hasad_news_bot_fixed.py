@@ -289,6 +289,92 @@ SHARE_BASE_URL = "https://hasad-alyoum.com"
 
 
 TELEGRAM_CAPTION_LIMIT = 1024
+TELEGRAM_SECTION_NAMES = tuple(CATEGORY_OPTIONS.values())
+TELEGRAM_SECTION_STATE_FILE = os.path.join(BASE_DIR, "telegram_section_state.json")
+TELEGRAM_UPDATES_OFFSET_FILE = os.path.join(BASE_DIR, "telegram_control_update_offset.json")
+
+
+def _load_telegram_section_state() -> dict[str, bool]:
+    """حالة نشر الأقسام في قناة Telegram؛ لا تتحكم في نشر الموقع."""
+    try:
+        with open(TELEGRAM_SECTION_STATE_FILE, encoding="utf-8") as f:
+            raw = json.load(f)
+        return {name: bool(raw.get(name, True)) for name in TELEGRAM_SECTION_NAMES}
+    except (OSError, ValueError, TypeError):
+        return {name: True for name in TELEGRAM_SECTION_NAMES}
+
+
+def _save_telegram_section_state(state: dict[str, bool]) -> None:
+    os.makedirs(BASE_DIR, exist_ok=True)
+    temp = TELEGRAM_SECTION_STATE_FILE + ".tmp"
+    with open(temp, "w", encoding="utf-8") as f:
+        json.dump(state, f, ensure_ascii=False, indent=2)
+    os.replace(temp, TELEGRAM_SECTION_STATE_FILE)
+
+
+def _telegram_section_keyboard(state: dict[str, bool]) -> list[list[dict]]:
+    return [[{
+        "text": f"{'▶️ تشغيل' if not state[name] else '⏸ إيقاف'} {name}",
+        "callback_data": f"section:{'on' if not state[name] else 'off'}:{i}",
+    }] for i, name in enumerate(TELEGRAM_SECTION_NAMES)]
+
+
+def process_telegram_section_controls() -> None:
+    """يعالج /sections ونقرات لوحة الإدارة أثناء كل تشغيل للناشر."""
+    if not TELEGRAM_BOT_TOKEN or not ADMIN_TELEGRAM_CHAT_ID:
+        return
+    offset = 0
+    try:
+        with open(TELEGRAM_UPDATES_OFFSET_FILE, encoding="utf-8") as f:
+            offset = int(json.load(f).get("offset", 0))
+    except (OSError, ValueError, TypeError):
+        pass
+    api = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
+    try:
+        response = requests.get(f"{api}/getUpdates", params={"offset": offset, "timeout": 0, "allowed_updates": json.dumps(["message", "callback_query"])}, timeout=REQUEST_TIMEOUT)
+        response.raise_for_status()
+        updates = response.json().get("result", [])
+    except (requests.RequestException, ValueError) as exc:
+        log.warning("تعذّر فحص أوامر التحكم بأقسام Telegram: %s", exc)
+        return
+    state = _load_telegram_section_state()
+    changed = False
+    for update in updates:
+        next_offset = max(offset, int(update.get("update_id", 0)) + 1)
+        callback = update.get("callback_query")
+        message = update.get("message") or (callback or {}).get("message") or {}
+        chat_id = str((message.get("chat") or {}).get("id", ""))
+        if chat_id != str(ADMIN_TELEGRAM_CHAT_ID):
+            if callback:
+                requests.post(f"{api}/answerCallbackQuery", json={"callback_query_id": callback["id"], "text": "غير مصرح"}, timeout=REQUEST_TIMEOUT)
+            offset = next_offset
+            continue
+        if callback:
+            parts = (callback.get("data") or "").split(":")
+            if len(parts) == 3 and parts[0] == "section" and parts[1] in ("on", "off"):
+                try:
+                    name = TELEGRAM_SECTION_NAMES[int(parts[2])]
+                except (ValueError, IndexError):
+                    name = None
+                if name:
+                    state[name] = parts[1] == "on"
+                    changed = True
+                    requests.post(f"{api}/answerCallbackQuery", json={"callback_query_id": callback["id"], "text": f"تم {'تشغيل' if state[name] else 'إيقاف'} {name}"}, timeout=REQUEST_TIMEOUT)
+                    requests.post(f"{api}/editMessageReplyMarkup", json={"chat_id": chat_id, "message_id": message.get("message_id"), "reply_markup": {"inline_keyboard": _telegram_section_keyboard(state)}}, timeout=REQUEST_TIMEOUT)
+        elif (message.get("text") or "").strip().split()[0:1] in (["/sections"], ["/start"]):
+            requests.post(f"{api}/sendMessage", json={"chat_id": chat_id, "text": "تحكم بنشر الأخبار في قناة تيليجرام فقط. إيقاف القسم لا يؤثر على نشره في الموقع:", "reply_markup": {"inline_keyboard": _telegram_section_keyboard(state)}}, timeout=REQUEST_TIMEOUT)
+        offset = next_offset
+    if changed:
+        _save_telegram_section_state(state)
+    if updates:
+        with open(TELEGRAM_UPDATES_OFFSET_FILE, "w", encoding="utf-8") as f:
+            json.dump({"offset": offset}, f)
+
+
+def is_telegram_section_enabled(category: Optional[str]) -> bool:
+    if not category:
+        return True
+    return _load_telegram_section_state().get(category, True)
 
 
 def _telegram_visible_length(text: str) -> int:
@@ -304,8 +390,9 @@ def send_to_telegram(
     excerpt: str = "",
     image_url: Optional[str] = None,
     share_url: Optional[str] = None,
+    category: Optional[str] = None,
 ) -> bool:
-    if not TELEGRAM_ENABLED or not TELEGRAM_BOT_TOKEN:
+    if not TELEGRAM_ENABLED or not TELEGRAM_BOT_TOKEN or not is_telegram_section_enabled(category):
         return False
 
     safe_title = html.escape((title or "").strip())
@@ -2058,6 +2145,7 @@ def check_and_notify_scheduled_posts() -> None:
                 entry.get("excerpt", ""),
                 entry.get("featured_image"),
                 share_url=f"{SHARE_BASE_URL}/share/{post_id}",
+                category=entry.get("category"),
             ):
                 log.info(f"  📢 نُشر فعلياً وأُرسل لتيليجرام الآن: {entry.get('title', '')[:60]}")
                 notified += 1
@@ -3902,6 +3990,7 @@ def main():
                     "created_at": record["created_at"],
                     "scheduled_at": publish_time,
                     "featured_image": record.get("featured_image"),
+                    "category": post_category,
                 })
                 save_pending_scheduled(pending)
             else:
@@ -3911,6 +4000,7 @@ def main():
                     record.get("excerpt", ""),
                     record.get("featured_image"),
                     share_url=f"{SHARE_BASE_URL}/share/{post_id}",
+                    category=post_category,
                 )
                 log_discovery_ready([canonical_url])
         else:

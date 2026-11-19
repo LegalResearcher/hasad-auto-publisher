@@ -87,6 +87,7 @@ from hasad_news_bot_fixed import (
     build_canonical_url,
     SHARE_BASE_URL,
     send_to_telegram,
+    process_telegram_section_controls,
     log_discovery_ready,
     apply_headline_design_to_image,
     HEADLINE_DESIGN_ENABLED,
@@ -590,6 +591,7 @@ def get_masa_image_url(source_image_url, article_url=None, headline_text=None):
 
 
 def run():
+    process_telegram_section_controls()
     log.info("═" * 60)
     log.info("  📰  حصاد اليوم — تشغيل تلقائي (المساء برس + الاتحاد برس + سكاي نيوز تكنولوجيا) [الخبر اليمني ووكالة الصحافة اليمنية وسكاي نيوز رياضة موقوفة مؤقتاً]")
     log.info("═" * 60)
@@ -857,6 +859,7 @@ def run():
                 record.get("excerpt", ""),
                 record.get("featured_image"),
                 share_url=f"{SHARE_BASE_URL}/share/{post_id}",
+                category=record.get("category_name") or it.get("category"),
             )
 
             log_discovery_ready([canonical_url])
