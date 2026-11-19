@@ -195,6 +195,7 @@ def _secret(key: str, default: str = "") -> str:
 SUPABASE_URL = (_secret("SUPABASE_URL") or "https://utalkwuzxoygsjiwncbo.supabase.co").rstrip("/")
 SUPABASE_ANON_KEY = _secret("SUPABASE_ANON_KEY")
 SUPABASE_SERVICE_KEY = _secret("SUPABASE_SERVICE_KEY") or SUPABASE_ANON_KEY  # يقرأ الآن service_role الحقيقي من السر، مع رجوع احتياطي إلى anon فقط إن لم يوجد.
+SUPABASE_TELEGRAM_SERVICE_KEY = _secret("SUPABASE_SERVICE_ROLE_KEY") or _secret("SUPABASE_SERVICE_KEY")
 
 CATEGORY_OPTIONS = {
     "1": "أخبار وتقارير",
@@ -414,21 +415,20 @@ def is_telegram_section_enabled(category: Optional[str]) -> bool:
     global _TELEGRAM_REMOTE_SECTION_STATE
     if not category:
         return True
-    if _TELEGRAM_REMOTE_SECTION_STATE is None:
-        try:
-            response = requests.get(
-                f"{SUPABASE_URL}/rest/v1/bot_telegram_section_controls",
-                params={"select": "category,enabled", "limit": "200"},
-                headers={"apikey": SUPABASE_ANON_KEY, "Authorization": f"Bearer {SUPABASE_ANON_KEY}"},
-                timeout=REQUEST_TIMEOUT,
-            )
-            response.raise_for_status()
-            _TELEGRAM_REMOTE_SECTION_STATE = {
-                row["category"]: bool(row["enabled"]) for row in response.json()
-            }
-        except (requests.RequestException, ValueError, KeyError, TypeError) as exc:
-            log.warning("تعذّر قراءة حالة أقسام قناة Telegram من Supabase: %s", exc)
-            _TELEGRAM_REMOTE_SECTION_STATE = _load_telegram_section_state()
+    try:
+        response = requests.get(
+            f"{SUPABASE_URL}/rest/v1/bot_telegram_section_controls",
+            params={"select": "category,enabled", "limit": "200"},
+            headers={"apikey": SUPABASE_ANON_KEY, "Authorization": f"Bearer {SUPABASE_ANON_KEY}"},
+            timeout=REQUEST_TIMEOUT,
+        )
+        response.raise_for_status()
+        _TELEGRAM_REMOTE_SECTION_STATE = {
+            row["category"]: bool(row["enabled"]) for row in response.json()
+        }
+    except (requests.RequestException, ValueError, KeyError, TypeError) as exc:
+        log.warning("تعذّر قراءة حالة أقسام قناة Telegram من Supabase: %s", exc)
+        _TELEGRAM_REMOTE_SECTION_STATE = _load_telegram_section_state()
     return _TELEGRAM_REMOTE_SECTION_STATE.get(category, True)
 
 
@@ -439,6 +439,68 @@ def _telegram_visible_length(text: str) -> int:
     return len(visible_text.encode("utf-16-le")) // 2
 
 
+_TELEGRAM_SENT_POST_CACHE: set[str] = set()
+
+
+def _telegram_tracking_headers() -> dict:
+    if not SUPABASE_TELEGRAM_SERVICE_KEY:
+        raise RuntimeError("مفتاح Supabase service_role مطلوب لسجل إرسال Telegram.")
+    return {
+        "apikey": SUPABASE_TELEGRAM_SERVICE_KEY,
+        "Authorization": f"Bearer {SUPABASE_TELEGRAM_SERVICE_KEY}",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+
+
+def _telegram_post_was_sent(post_id: str) -> bool:
+    if post_id in _TELEGRAM_SENT_POST_CACHE:
+        return True
+    try:
+        response = requests.get(
+            f"{SUPABASE_URL}/rest/v1/bot_telegram_sent_posts",
+            headers=_telegram_tracking_headers(),
+            params={"select": "post_id", "post_id": f"eq.{post_id}", "limit": "1"},
+            timeout=REQUEST_TIMEOUT,
+        )
+        response.raise_for_status()
+        if response.json():
+            _TELEGRAM_SENT_POST_CACHE.add(post_id)
+            return True
+        queued = requests.get(
+            f"{SUPABASE_URL}/rest/v1/bot_telegram_backfill_queue",
+            headers=_telegram_tracking_headers(),
+            params={
+                "select": "post_id",
+                "post_id": f"eq.{post_id}",
+                "status": "in.(pending,processing,failed)",
+                "limit": "1",
+            },
+            timeout=REQUEST_TIMEOUT,
+        )
+        queued.raise_for_status()
+        if queued.json():
+            _TELEGRAM_SENT_POST_CACHE.add(post_id)
+            return True
+    except (requests.RequestException, ValueError, KeyError, TypeError) as exc:
+        log.warning("تعذّر التحقق من سجل إرسال Telegram للخبر %s: %s", post_id, exc)
+    return False
+
+
+def _record_telegram_post_sent(post_id: str, category: Optional[str]) -> None:
+    try:
+        response = requests.post(
+            f"{SUPABASE_URL}/rest/v1/bot_telegram_sent_posts?on_conflict=post_id",
+            headers={**_telegram_tracking_headers(), "Prefer": "resolution=ignore-duplicates,return=minimal"},
+            json={"post_id": post_id, "category": category or ""},
+            timeout=REQUEST_TIMEOUT,
+        )
+        response.raise_for_status()
+        _TELEGRAM_SENT_POST_CACHE.add(post_id)
+    except (requests.RequestException, ValueError, KeyError, TypeError) as exc:
+        log.warning("تعذّر تسجيل إرسال Telegram للخبر %s: %s", post_id, exc)
+
+
 def send_to_telegram(
     title: str,
     article_url: str,
@@ -446,9 +508,21 @@ def send_to_telegram(
     image_url: Optional[str] = None,
     share_url: Optional[str] = None,
     category: Optional[str] = None,
+    post_id: Optional[str] = None,
 ) -> bool:
     if not TELEGRAM_ENABLED or not TELEGRAM_BOT_TOKEN or not is_telegram_section_enabled(category):
         return False
+    if post_id and not SUPABASE_TELEGRAM_SERVICE_KEY:
+        log.error("تعذّر إرسال الخبر إلى Telegram دون مفتاح Supabase service_role لتسجيل عدم التكرار.")
+        return False
+    if post_id and _telegram_post_was_sent(post_id):
+        log.info("تخطي إرسال Telegram لخبر سبق إرساله (post_id=%s).", post_id)
+        return True
+
+    def successful_send() -> bool:
+        if post_id:
+            _record_telegram_post_sent(post_id, category)
+        return True
 
     safe_title = html.escape((title or "").strip())
     safe_excerpt = html.escape((excerpt or "").strip())
@@ -497,7 +571,7 @@ def send_to_telegram(
         try:
             response = requests.post(url, json=payload, timeout=REQUEST_TIMEOUT)
             if response.status_code == 200:
-                return True
+                return successful_send()
             log.warning(f"  ⚠️  فشل fallback إرسال تليجرام [{response.status_code}]: {response.text[:200]}")
         except requests.RequestException as exc:
             log.warning(f"  ⚠️  خطأ fallback إرسال تليجرام: {exc}")
@@ -515,7 +589,7 @@ def send_to_telegram(
             }
             response = requests.post(url, json=payload, timeout=REQUEST_TIMEOUT)
             if response.status_code == 200:
-                return True
+                return successful_send()
             log.warning(f"  ⚠️  فشل إرسال صورة تليجرام [{response.status_code}]: {response.text[:200]}")
             return send_text_fallback()
         return send_text_fallback()
@@ -2201,6 +2275,7 @@ def check_and_notify_scheduled_posts() -> None:
                 entry.get("featured_image"),
                 share_url=f"{SHARE_BASE_URL}/share/{post_id}",
                 category=entry.get("category"),
+                post_id=post_id,
             ):
                 log.info(f"  📢 نُشر فعلياً وأُرسل لتيليجرام الآن: {entry.get('title', '')[:60]}")
                 notified += 1
@@ -4056,6 +4131,7 @@ def main():
                     record.get("featured_image"),
                     share_url=f"{SHARE_BASE_URL}/share/{post_id}",
                     category=post_category,
+                    post_id=post_id,
                 )
                 log_discovery_ready([canonical_url])
         else:

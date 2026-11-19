@@ -858,6 +858,7 @@ def run():
                 record.get("featured_image"),
                 share_url=f"{SHARE_BASE_URL}/share/{post_id}",
                 category=record.get("category_name") or it.get("category"),
+                post_id=post_id,
             )
 
             log_discovery_ready([canonical_url])
